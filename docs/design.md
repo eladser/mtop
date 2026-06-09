@@ -50,13 +50,13 @@ Keyboard-driven, `htop` conventions. Dark, dense, no mouse needed.
 | llama.cpp server | slots, kv-cache, timings | `/metrics` (prometheus), `/slots` — both need launch flags (`--metrics`, `--slots`); README must say so up front |
 | vLLM | throughput, queue | `/metrics` (prometheus) |
 | LM Studio | loaded models | REST `/api/v0/models` |
-| GPU | util, vram, temp, power | NVML (nvidia) first; Apple Silicon (`powermetrics`/IOKit) in v0.2 — the unified-memory Mac crowd is a big slice of the launch audience; ROCm SMI after |
+| GPU | util, vram, temp, power | nvidia-smi query interface (no cgo, works win/linux); Apple Silicon (`powermetrics`/IOKit) in 1.1 — the unified-memory Mac crowd is a big slice of the launch audience; ROCm SMI after |
 
 Request-level visibility, decided (was an open question): **proxy mode ships in v0.** It's the only way to get tok/s and context fill for Ollama, which is the headline of the demo gif — without it the REQUESTS pane is empty on the most popular backend, and an empty flagship pane at launch is fatal. It's also the one component with zero technical risk here (same interception pattern as Seerlens, already built once). `OLLAMA_HOST=localhost:11434` becomes `localhost:4321` (mtop), one env var, documented in the first screen of the README. Poll-only mode still works with no setup — models + GPU panes live, REQUESTS pane shows an honest empty state telling you how to enable the proxy.
 
 ## Stack
 
-Recommendation: **Go + bubbletea + lipgloss**.
+Decision: **Go + bubbletea + lipgloss**.
 
 - It's the genre standard (every loved TUI of this generation: lazygit, lazydocker, k9s-adjacent ecosystem) — contributors expect it, and the ecosystem has solved the hard rendering problems.
 - Single static binary, trivial cross-compile (win/linux/mac in one CI job), `brew install` / `scoop install` friendly. Install friction is a star-killer; this kills the friction.
@@ -64,16 +64,17 @@ Recommendation: **Go + bubbletea + lipgloss**.
 
 Honest alternative: .NET 10 AOT + Spectre.Console/Terminal.Gui. Plays to strength, reinforces the ".NET AI tooling guy" brand, but the TUI ecosystem is thinner and the genre crowd skews Go/Rust. Decision can flip in week 1 if Go velocity feels wrong; nothing else in this doc changes.
 
-## v0 scope (shippable alone)
+## 1.0 scope (shipped)
 
 1. Ollama only. Models pane from `/api/ps` / `/api/tags` polling.
-2. NVML GPU stats (nvidia first; that's the biggest single segment).
-3. **Proxy mode** for the REQUESTS pane + throughput sparkline (tok/s, prompt/completion tokens, context fill, duration). One env var to enable; honest empty state without it.
-4. Single binary, zero config: `mtop` finds Ollama on localhost.
+2. GPU stats via nvidia-smi (nvidia first; that's the biggest single segment).
+3. **Proxy mode** for the REQUESTS pane + throughput sparkline (tok/s, prompt/completion tokens, duration). One env var to enable; honest empty state without it.
+4. **Model unload.** Ollama is supposed to evict idle models and sometimes doesn't — a model can sit past its expiry holding VRAM until you `ollama stop` it by hand. mtop marks those rows as overdue, `u` unloads the selected model (a generate call with `keep_alive: 0`, same as `ollama stop`), and `-idle-unload 15m` does it automatically for anything that hasn't served a proxied request in that long.
+5. Single binary, zero config: `mtop` finds Ollama on localhost.
 
-Not in v0: llama.cpp/vLLM/LM Studio, Apple/AMD GPU stats, historical persistence, alerts. Roadmap.
+Not in 1.0: llama.cpp/vLLM/LM Studio, Apple/AMD GPU stats, historical persistence, alerts. Roadmap.
 
-## v0 definition of done
+## 1.0 definition of done
 
 - The gif shows real data end-to-end: a model loading, a request streaming through the proxy, tok/s sparkline moving, GPU pane reacting. No mockups, no staged data.
 - `mtop` runs on a clean Windows + Linux + macOS machine from a downloaded release binary with zero config.
