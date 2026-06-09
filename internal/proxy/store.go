@@ -61,6 +61,19 @@ func (s *Store) TokRates(n int) []float64 {
 	return out
 }
 
+// LastSeen returns when a model last handled a request through the
+// proxy, or zero if it never did.
+func (s *Store) LastSeen(model string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.reqs {
+		if r.Model == model {
+			return r.When
+		}
+	}
+	return time.Time{}
+}
+
 func (s *Store) SetErr(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

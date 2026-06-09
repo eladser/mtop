@@ -11,10 +11,10 @@ import (
 
 type Stats struct {
 	Name     string
-	Util     int // %
-	MemUsed  int // MiB
-	MemTotal int // MiB
-	Temp     int // celsius
+	Util     int     // %
+	MemUsed  int     // MiB
+	MemTotal int     // MiB
+	Temp     int     // celsius
 	Power    float64 // watts
 }
 

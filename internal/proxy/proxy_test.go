@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func proxyFor(t *testing.T, upstream string, store *Store) *httptest.Server {
@@ -73,6 +74,19 @@ func TestNonStreamingNoTrailingNewline(t *testing.T) {
 	reqs := store.Recent(1)
 	if len(reqs) != 1 || reqs[0].OutTk != 40 || reqs[0].Path != "/api/chat" {
 		t.Fatalf("bad record: %+v", reqs)
+	}
+}
+
+func TestLastSeen(t *testing.T) {
+	store := NewStore(10)
+	if !store.LastSeen("a").IsZero() {
+		t.Fatal("unknown model should be zero")
+	}
+	store.Add(Request{Model: "a", When: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+	store.Add(Request{Model: "b", When: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)})
+	store.Add(Request{Model: "a", When: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)})
+	if got := store.LastSeen("a"); got.Day() != 3 {
+		t.Fatalf("want newest entry, got %v", got)
 	}
 }
 

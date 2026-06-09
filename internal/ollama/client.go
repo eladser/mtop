@@ -2,7 +2,10 @@ package ollama
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -48,6 +51,29 @@ func (c *Client) OnDisk() (int, error) {
 		return 0, err
 	}
 	return len(r.Models), nil
+}
+
+// Unload drops a model from memory now. There's no dedicated endpoint
+// for this; a generate call with keep_alive 0 and no prompt is how
+// `ollama stop` does it too.
+func (c *Client) Unload(model string) error {
+	body := fmt.Sprintf(`{"model":%q,"keep_alive":0}`, model)
+	resp, err := c.hc.Post(c.base+"/api/generate", "application/json", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ollama: %s", resp.Status)
+	}
+	return nil
+}
+
+// Overdue reports a model that should have expired but is still loaded.
+// Happens more than it should; this is what the u key is for.
+func (m Model) Overdue() bool {
+	return !m.ExpiresAt.IsZero() && time.Now().After(m.ExpiresAt)
 }
 
 func (c *Client) get(path string, v any) error {
