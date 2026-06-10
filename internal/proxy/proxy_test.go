@@ -81,6 +81,10 @@ func TestOpenAIStreaming(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "data: {\"model\":\"qwen2.5-7b\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		// tok/s for openai-style requests is wall-clock; answering within
+		// one clock tick (~0.5ms on windows) makes it zero, so take a
+		// moment like a real model would
+		time.Sleep(20 * time.Millisecond)
 		io.WriteString(w, "data: {\"model\":\"qwen2.5-7b\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":42}}\n\n")
 		io.WriteString(w, "data: [DONE]\n\n")
 	}))
