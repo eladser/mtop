@@ -37,11 +37,11 @@ Keyboard-driven, htop conventions, dark, no mouse.
 | vLLM | model + cache use + running count | `/metrics`, prometheus text, model name from the label |
 | GPU | util, mem, temp, power | `nvidia-smi` / `rocm-smi` query output, no cgo. Apple Silicon: unified-memory numbers from `sysctl` + `vm_stat`; real GPU util needs root for powermetrics, still open |
 
-The proxy is the only piece that needs anything from the user: one env var (`OLLAMA_HOST=127.0.0.1:4321`, or `/v1` as an OpenAI base url). Bytes pass through untouched; the tap reads each line looking for the final chunk (ollama) or the usage block (openai-style). It gives up after buffering 1 MiB without finding one — a response that big still reaches the client whole, it just isn't counted. Ollama's tok/s comes from its own timings; openai-style has none, so it's tokens over wall time, stamped before the round trip so prompt processing is included. Without the proxy the models and GPU panes still work, and the requests pane says how to fix itself.
+The proxy is the only piece that needs anything from the user: one env var (`OLLAMA_HOST=127.0.0.1:4321`, or `/v1` as an OpenAI base url). Bytes pass through untouched; the tap reads each line looking for the final chunk (ollama) or the usage block (openai-style). It stops buffering at 1 MiB if it hasn't found one, so a giant response still reaches the client whole, it just doesn't get counted. Ollama's tok/s comes from its own timings. Openai-style has none, so it's tokens over wall time, stamped before the round trip so prompt processing is in there. Without the proxy the models and GPU panes still work, and the requests pane says how to fix itself.
 
-Traffic through the proxy is plain http with no auth, which is fine on loopback and a bad idea anywhere else — binding `-listen` to a non-loopback address prints a warning saying so.
+Traffic through the proxy is plain http with no auth. Fine on loopback, a bad idea anywhere else, so binding `-listen` to a non-loopback address prints a warning.
 
-The proxy forwards everything to ollama, including endpoints that delete or pull models, so it checks the Host and Origin on the way in. A request has to arrive with a loopback Host (or the address you bound to), and any Origin header has to be local. That blocks a web page you have open from POSTing to the proxy or rebinding dns to read it — the browser shares your loopback, so binding to 127.0.0.1 isn't enough on its own. CLI clients and SDKs send neither header and call with a loopback Host, so they're unaffected.
+The proxy forwards everything to ollama, including the endpoints that delete or pull models, so it checks the Host and Origin on the way in. A request has to come in with a loopback Host (or the address you bound to), and any Origin header has to be local. That stops a web page you have open from POSTing to the proxy or rebinding dns to read it. The browser shares your loopback, so binding to 127.0.0.1 isn't enough by itself. CLI clients and SDKs send neither header and call with a loopback Host, so nothing changes for them.
 
 `/metrics` on the proxy port re-exports what the tap has seen, prometheus format.
 
@@ -51,7 +51,7 @@ Go + bubbletea + lipgloss. It's what this genre of tool is built with, the rende
 
 ## Unloading models
 
-Ollama is supposed to evict idle models and sometimes doesn't — a model can sit past its expiry holding VRAM until someone runs `ollama stop`. mtop marks those rows overdue, `u` unloads the selected model (a generate call with `keep_alive: 0`, which is all `ollama stop` does anyway), and `-idle-unload 15m` handles it automatically using last-traffic-seen through the proxy. Other servers don't expose an unload, so `u` on their rows just says so.
+Ollama is supposed to evict idle models and sometimes doesn't. A model can sit past its expiry holding VRAM until someone runs `ollama stop`. mtop marks those rows overdue. `u` unloads the selected model with a generate call carrying `keep_alive: 0`, which is all `ollama stop` does anyway. `-idle-unload 15m` does the same automatically, off the last traffic seen through the proxy. Other servers don't expose an unload, so `u` on their rows just says so.
 
 ## Non-goals
 
@@ -62,4 +62,4 @@ Ollama is supposed to evict idle models and sometimes doesn't — a model can si
 
 ## Known risks
 
-Ollama could ship a built-in `ollama top` someday; the answer is that mtop's value is one view across four servers plus the GPU, which no single vendor will build. The proxy needs a one-line config change and some people won't bother — that's fine, half the tool works without it. And tok/s for openai-style requests includes prompt processing (wall clock), which is documented rather than hidden.
+Ollama could ship a built-in `ollama top` someday. If it does, mtop still has the part ollama won't build: one view across four servers plus the GPU. The proxy needs a one-line config change and some people won't bother, which is fine, half the tool works without it. And tok/s for openai-style requests folds in prompt processing because it's wall-clock, which the FAQ says out loud instead of hiding.
