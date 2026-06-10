@@ -191,7 +191,7 @@ func (a *App) View() string {
 	}
 	paneW := (a.w - 6) / 2
 	top := lipgloss.JoinHorizontal(lipgloss.Top,
-		paneSt.Width(paneW).Render(a.modelsPane()),
+		paneSt.Width(paneW).Render(a.modelsPane(paneW)),
 		paneSt.Width(paneW).Render(a.gpuPane()),
 	)
 	var mid string
@@ -239,7 +239,7 @@ func (a *App) gpuAlert() string {
 	return ""
 }
 
-func (a *App) modelsPane() string {
+func (a *App) modelsPane(w int) string {
 	var b strings.Builder
 	b.WriteString(titleSt.Render("MODELS"))
 	if len(a.alive) > 1 {
@@ -248,6 +248,8 @@ func (a *App) modelsPane() string {
 	if a.disk > 0 {
 		b.WriteString(dimSt.Render(fmt.Sprintf("  %d on disk", a.disk)))
 	}
+	// lines longer than the pane wrap and wreck the layout, so cut them
+	lineW := w - 4
 	multi := len(a.alive) > 1
 	switch {
 	case a.ollErr != nil && len(a.rows) == 0:
@@ -255,16 +257,19 @@ func (a *App) modelsPane() string {
 	case len(a.rows) == 0:
 		b.WriteString("\n" + dimSt.Render("nothing loaded — run a model and it shows up here"))
 	default:
-		head := fmt.Sprintf("  %-22s %8s %6s %6s  %s", "NAME", "SIZE", "QUANT", "VRAM", "TTL")
+		head := fmt.Sprintf("%-22s %8s %6s %6s  %s", "NAME", "SIZE", "QUANT", "VRAM", "TTL")
 		if multi {
-			head = fmt.Sprintf("  %-22s %-9s %8s %6s %6s  %s", "NAME", "FROM", "SIZE", "QUANT", "VRAM", "TTL")
+			head = fmt.Sprintf("%-22s %-9s %6s %6s  %s", "NAME", "FROM", "QUANT", "VRAM", "TTL")
 		}
-		b.WriteString("\n" + dimSt.Render(head))
+		b.WriteString("\n" + dimSt.Render("  "+trunc(head, lineW)))
 		for i, r := range a.rows {
-			line := a.modelLine(r, multi)
-			if i == a.sel {
+			line := trunc(a.modelLine(r, multi), lineW)
+			switch {
+			case i == a.sel:
 				b.WriteString("\n" + selSt.Render("▸ "+line))
-			} else {
+			case overdue(r):
+				b.WriteString("\n" + warnSt.Render("  "+line))
+			default:
 				b.WriteString("\n  " + line)
 			}
 		}
@@ -272,28 +277,37 @@ func (a *App) modelsPane() string {
 	return b.String()
 }
 
+// modelLine is plain text; styling happens per whole row so truncation
+// can't cut an ansi sequence in half.
 func (a *App) modelLine(r sources.Row, multi bool) string {
 	vram := "—"
 	if r.VRAM > 0 {
 		vram = gib(r.VRAM)
 	}
-	ttl := ttlFor(r)
 	if multi {
-		return fmt.Sprintf("%-22s %-9s %8s %6s %6s  %s", r.Name, r.From, r.Size, r.Quant, vram, ttl)
+		return fmt.Sprintf("%-22s %-9s %6s %6s  %s", trunc(r.Name, 22), r.From, r.Quant, vram, ttlFor(r))
 	}
-	return fmt.Sprintf("%-22s %8s %6s %6s  %s", r.Name, r.Size, r.Quant, vram, ttl)
+	return fmt.Sprintf("%-22s %8s %6s %6s  %s", trunc(r.Name, 22), r.Size, r.Quant, vram, ttlFor(r))
 }
 
 func ttlFor(r sources.Row) string {
 	switch {
 	case overdue(r):
-		return warnSt.Render("overdue — press u")
+		return "overdue — press u"
 	case r.Expires.IsZero() && r.Note != "":
-		return dimSt.Render(r.Note)
+		return r.Note
 	case r.Expires.IsZero():
 		return "—"
 	}
 	return time.Until(r.Expires).Round(time.Second).String()
+}
+
+func trunc(s string, w int) string {
+	r := []rune(s)
+	if len(r) <= w || w < 2 {
+		return s
+	}
+	return string(r[:w-1]) + "…"
 }
 
 func overdue(r sources.Row) bool {
