@@ -37,7 +37,9 @@ Keyboard-driven, htop conventions, dark, no mouse.
 | vLLM | model + cache use + running count | `/metrics`, prometheus text, model name from the label |
 | GPU | util, mem, temp, power | `nvidia-smi` / `rocm-smi` query output, no cgo. Apple Silicon: unified-memory numbers from `sysctl` + `vm_stat`; real GPU util needs root for powermetrics, still open |
 
-The proxy is the only piece that needs anything from the user: one env var (`OLLAMA_HOST=127.0.0.1:4321`, or `/v1` as an OpenAI base url). Bytes pass through untouched; the tap reads each line looking for the final chunk (ollama) or the usage block (openai-style). Ollama's tok/s comes from its own timings; openai-style has none, so it's tokens over wall time. Without the proxy the models and GPU panes still work, and the requests pane says how to fix itself.
+The proxy is the only piece that needs anything from the user: one env var (`OLLAMA_HOST=127.0.0.1:4321`, or `/v1` as an OpenAI base url). Bytes pass through untouched; the tap reads each line looking for the final chunk (ollama) or the usage block (openai-style). It gives up after buffering 1 MiB without finding one — a response that big still reaches the client whole, it just isn't counted. Ollama's tok/s comes from its own timings; openai-style has none, so it's tokens over wall time, stamped before the round trip so prompt processing is included. Without the proxy the models and GPU panes still work, and the requests pane says how to fix itself.
+
+Traffic through the proxy is plain http with no auth, which is fine on loopback and a bad idea anywhere else — binding `-listen` to a non-loopback address prints a warning saying so.
 
 `/metrics` on the proxy port re-exports what the tap has seen, prometheus format.
 
