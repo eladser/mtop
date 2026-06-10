@@ -17,3 +17,12 @@ func TestSparkline(t *testing.T) {
 		t.Fatalf("expected 2 runes, got %q", got)
 	}
 }
+
+func TestTrunc(t *testing.T) {
+	if got := trunc("short", 10); got != "short" {
+		t.Fatalf("got %q", got)
+	}
+	if got := trunc("llama-3.1-8b-instruct.Q4_K_M.gguf", 22); got != "llama-3.1-8b-instruct…" || len([]rune(got)) != 22 {
+		t.Fatalf("got %q (%d runes)", got, len([]rune(got)))
+	}
+}
