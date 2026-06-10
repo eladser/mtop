@@ -77,6 +77,81 @@ func TestNonStreamingNoTrailingNewline(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreaming(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"model\":\"qwen2.5-7b\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		io.WriteString(w, "data: {\"model\":\"qwen2.5-7b\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":42}}\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	reqs := store.Recent(1)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 recorded request, got %d", len(reqs))
+	}
+	r := reqs[0]
+	if r.Model != "qwen2.5-7b" || r.OutTk != 42 || r.PromptTk != 9 {
+		t.Fatalf("bad record: %+v", r)
+	}
+	if r.TokSec <= 0 {
+		t.Fatalf("wall-clock tok/s should be positive: %+v", r)
+	}
+}
+
+func TestByModelAndProm(t *testing.T) {
+	store := NewStore(10)
+	store.Add(Request{Model: "a", TokSec: 10, OutTk: 100})
+	store.Add(Request{Model: "a", TokSec: 20, OutTk: 100})
+	store.Add(Request{Model: "b", TokSec: 5, OutTk: 50})
+
+	stats := store.ByModel()
+	if len(stats) != 2 || stats[0].Model != "a" {
+		t.Fatalf("busiest first: %+v", stats)
+	}
+	if stats[0].Count != 2 || stats[0].AvgTok != 15 || stats[0].OutTk != 200 {
+		t.Fatalf("bad aggregate: %+v", stats[0])
+	}
+
+	text := store.PromText()
+	for _, want := range []string{`mtop_requests_total{model="a"} 2`, `mtop_tokens_out_total{model="b"} 50`, `quantile="0.95"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("metrics should not reach the upstream")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	store.Add(Request{Model: "x", TokSec: 7, OutTk: 10})
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Get(front.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "mtop_requests_total") {
+		t.Fatalf("not prometheus output: %s", body)
+	}
+}
+
 func TestLastSeen(t *testing.T) {
 	store := NewStore(10)
 	if !store.LastSeen("a").IsZero() {

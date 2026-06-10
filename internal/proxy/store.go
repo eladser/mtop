@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -72,6 +75,78 @@ func (s *Store) LastSeen(model string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+type ModelStat struct {
+	Model    string
+	Count    int
+	AvgTok   float64
+	P50, P95 float64
+	OutTk    int
+}
+
+// ByModel aggregates everything seen so far, busiest model first.
+func (s *Store) ByModel() []ModelStat {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rates := map[string][]float64{}
+	out := map[string]int{}
+	for _, r := range s.reqs {
+		rates[r.Model] = append(rates[r.Model], r.TokSec)
+		out[r.Model] += r.OutTk
+	}
+	var all []ModelStat
+	for model, rs := range rates {
+		sort.Float64s(rs)
+		sum := 0.0
+		for _, v := range rs {
+			sum += v
+		}
+		all = append(all, ModelStat{
+			Model:  model,
+			Count:  len(rs),
+			AvgTok: sum / float64(len(rs)),
+			P50:    pct(rs, 0.50),
+			P95:    pct(rs, 0.95),
+			OutTk:  out[model],
+		})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Count > all[j].Count })
+	return all
+}
+
+// Percentiles of tok/s across everything in the buffer.
+func (s *Store) Percentiles() (p50, p95 float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rs := make([]float64, 0, len(s.reqs))
+	for _, r := range s.reqs {
+		rs = append(rs, r.TokSec)
+	}
+	sort.Float64s(rs)
+	return pct(rs, 0.50), pct(rs, 0.95)
+}
+
+func pct(sorted []float64, q float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	return sorted[int(q*float64(len(sorted)-1))]
+}
+
+// PromText renders what the proxy has seen in prometheus exposition
+// format, served at /metrics on the proxy port.
+func (s *Store) PromText() string {
+	var b strings.Builder
+	for _, m := range s.ByModel() {
+		fmt.Fprintf(&b, "mtop_requests_total{model=%q} %d\n", m.Model, m.Count)
+		fmt.Fprintf(&b, "mtop_tokens_out_total{model=%q} %d\n", m.Model, m.OutTk)
+		fmt.Fprintf(&b, "mtop_tok_per_s_avg{model=%q} %.1f\n", m.Model, m.AvgTok)
+	}
+	p50, p95 := s.Percentiles()
+	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.5\"} %.1f\n", p50)
+	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.95\"} %.1f\n", p95)
+	return b.String()
 }
 
 func (s *Store) SetErr(err error) {

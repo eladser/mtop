@@ -1,96 +1,61 @@
-# mtop — design
+# mtop — design notes
 
 ## What it is
 
-A live terminal dashboard for the local-AI stack. You run models with Ollama / llama.cpp / LM Studio; mtop shows you what's actually happening: loaded models, VRAM pressure, tokens/sec, context fill, request log, GPU state. The thing everyone currently approximates with `nvtop` + server logs + guesswork.
+A live terminal dashboard for the local-AI stack. You run models with Ollama, llama.cpp, LM Studio or vLLM; mtop shows what's actually happening: loaded models, VRAM, tok/s, request log, GPU state. The thing people otherwise approximate with `nvtop` + server logs + guesswork.
 
 Tagline: "htop for your local AI."
 
-## Why this, why now
+## Why
 
-- Local AI is the hottest wave on GitHub (Ollama ~162k stars, Open WebUI 100k+, r/LocalLLaMA is huge and star-generous). Riding the wave is the point, not avoiding it.
-- The seat is open (verified 2026-06-09):
-  - `bugkill3r/aitop` — monitors cloud-agent *spend* (Claude Code / Gemini CLI bills). Not local inference.
-  - `InfraWhisperer/llmtop` — "htop for your LLM inference *cluster*". DCGM, queue depth, ops audience. Not the desktop.
-  - `arinbjornk/llmtop` — system monitor with LLM-generated insights. Different product.
-  - `oterm`, `parllama` — chat TUIs, not monitors.
-  - `howfast`, `ollama-benchmark` — one-shot benchmarks.
-  - Grafana + Prometheus + DCGM — works, but it's an infra stack, not a tool. Nobody sets this up for their desktop.
-  - Nothing owns "what is my local AI doing right now" on a single machine.
-- The demo gif sells itself: panes lighting up while a model streams.
+Everyone running local models eventually asks "why is this slow", "what's eating my VRAM", or "is it even using the GPU". The existing answers are either chat clients (oterm, parllama), one-shot benchmarks, cluster-ops tooling (DCGM, the inference-cluster llmtop), or a full Grafana stack nobody sets up for their desktop. Nothing owned the single-machine view when this started, so mtop does.
 
-## Who uses it
-
-Anyone running local models who's asked "why is this slow" or "what's eating my VRAM" or "is it even using the GPU". That's most of r/LocalLLaMA on any given day.
-
-## Panes (v0 target)
+## Layout
 
 ```
 +----------------------------+------------------------------+
 | MODELS                     | GPU                          |
-| name, size, VRAM, ttl,     | util %, VRAM used/total,     |
-| backend, quant             | temp, power, sparklines      |
+| name, from, size, quant,   | util %, mem used/total,      |
+| vram, ttl                  | temp, power                  |
 +----------------------------+------------------------------+
-| REQUESTS (live)                                           |
-| time, model, tok/s, prompt/completion tokens,             |
-| context fill %, duration, status                          |
+| REQUESTS (live)  /  BY MODEL (toggle with c)              |
 +-----------------------------------------------------------+
-| THROUGHPUT  tok/s over time (sparkline), p50/p95 latency  |
+| TOK/S sparkline · last · peak · p50 · p95                 |
 +-----------------------------------------------------------+
 ```
 
-Keyboard-driven, `htop` conventions. Dark, dense, no mouse needed.
+Keyboard-driven, htop conventions, dark, no mouse.
 
 ## Data sources
 
-| Backend | What | How |
-|---------|------|-----|
+| Server | What | How |
+|--------|------|-----|
 | Ollama | loaded models, VRAM, ttl | `GET /api/ps`, `/api/tags` |
-| Ollama | per-request tokens + timing | **proxy mode only.** Stock Ollama has no metrics endpoint; `/api/ps` shows loaded models, nothing per-request. The response metadata (`eval_count`, `eval_duration`) is only visible to the caller — i.e., to mtop when it sits in the middle |
-| llama.cpp server | slots, kv-cache, timings | `/metrics` (prometheus), `/slots` — both need launch flags (`--metrics`, `--slots`); README must say so up front |
-| vLLM | throughput, queue | `/metrics` (prometheus) |
-| LM Studio | loaded models | REST `/api/v0/models` |
-| GPU | util, vram, temp, power | nvidia-smi query interface (no cgo, works win/linux); Apple Silicon (`powermetrics`/IOKit) in 1.1 — the unified-memory Mac crowd is a big slice of the launch audience; ROCm SMI after |
+| Ollama | per-request tokens + timings | through the proxy only. Ollama has no metrics endpoint; `eval_count`/`eval_duration` ride on the response itself, so only the caller sees them |
+| llama.cpp | model from `/props`; kv-cache + in-flight from `/metrics` | `/metrics` and `/slots` need `--metrics` / `--slots` on launch |
+| LM Studio | loaded models | `GET /api/v0/models`, rows with `state: "loaded"` |
+| vLLM | model + cache use + running count | `/metrics`, prometheus text, model name from the label |
+| GPU | util, mem, temp, power | `nvidia-smi` / `rocm-smi` query output, no cgo. Apple Silicon: unified-memory numbers from `sysctl` + `vm_stat`; real GPU util needs root for powermetrics, still open |
 
-Request-level visibility, decided (was an open question): **proxy mode ships in v0.** It's the only way to get tok/s and context fill for Ollama, which is the headline of the demo gif — without it the REQUESTS pane is empty on the most popular backend, and an empty flagship pane at launch is fatal. It's also the one component with zero technical risk here (same interception pattern as Seerlens, already built once). `OLLAMA_HOST=localhost:11434` becomes `localhost:4321` (mtop), one env var, documented in the first screen of the README. Poll-only mode still works with no setup — models + GPU panes live, REQUESTS pane shows an honest empty state telling you how to enable the proxy.
+The proxy is the only piece that needs anything from the user: one env var (`OLLAMA_HOST=127.0.0.1:4321`, or `/v1` as an OpenAI base url). Bytes pass through untouched; the tap reads each line looking for the final chunk (ollama) or the usage block (openai-style). Ollama's tok/s comes from its own timings; openai-style has none, so it's tokens over wall time. Without the proxy the models and GPU panes still work, and the requests pane says how to fix itself.
+
+`/metrics` on the proxy port re-exports what the tap has seen, prometheus format.
 
 ## Stack
 
-Decision: **Go + bubbletea + lipgloss**.
+Go + bubbletea + lipgloss. It's what this genre of tool is built with, the rendering problems are solved, and it cross-compiles to single static binaries for all three platforms in one CI job.
 
-- It's the genre standard (every loved TUI of this generation: lazygit, lazydocker, k9s-adjacent ecosystem) — contributors expect it, and the ecosystem has solved the hard rendering problems.
-- Single static binary, trivial cross-compile (win/linux/mac in one CI job), `brew install` / `scoop install` friendly. Install friction is a star-killer; this kills the friction.
-- New language on the portfolio next to the .NET flagship (Seerlens) — breadth signal.
+## Unloading models
 
-Honest alternative: .NET 10 AOT + Spectre.Console/Terminal.Gui. Plays to strength, reinforces the ".NET AI tooling guy" brand, but the TUI ecosystem is thinner and the genre crowd skews Go/Rust. Decision can flip in week 1 if Go velocity feels wrong; nothing else in this doc changes.
-
-## 1.0 scope (shipped)
-
-1. Ollama only. Models pane from `/api/ps` / `/api/tags` polling.
-2. GPU stats via nvidia-smi (nvidia first; that's the biggest single segment).
-3. **Proxy mode** for the REQUESTS pane + throughput sparkline (tok/s, prompt/completion tokens, duration). One env var to enable; honest empty state without it.
-4. **Model unload.** Ollama is supposed to evict idle models and sometimes doesn't — a model can sit past its expiry holding VRAM until you `ollama stop` it by hand. mtop marks those rows as overdue, `u` unloads the selected model (a generate call with `keep_alive: 0`, same as `ollama stop`), and `-idle-unload 15m` does it automatically for anything that hasn't served a proxied request in that long.
-5. Single binary, zero config: `mtop` finds Ollama on localhost.
-
-Not in 1.0: llama.cpp/vLLM/LM Studio, Apple/AMD GPU stats, historical persistence, alerts. Roadmap.
-
-## 1.0 definition of done
-
-- The gif shows real data end-to-end: a model loading, a request streaming through the proxy, tok/s sparkline moving, GPU pane reacting. No mockups, no staged data.
-- `mtop` runs on a clean Windows + Linux + macOS machine from a downloaded release binary with zero config.
-- Empty states exist for: no Ollama found, no GPU, proxy not enabled. Each says what to do next in one line.
-- README: gif first, install one-liner second. A stranger can go from zero to seeing their own models in under 2 minutes.
+Ollama is supposed to evict idle models and sometimes doesn't — a model can sit past its expiry holding VRAM until someone runs `ollama stop`. mtop marks those rows overdue, `u` unloads the selected model (a generate call with `keep_alive: 0`, which is all `ollama stop` does anyway), and `-idle-unload 15m` handles it automatically using last-traffic-seen through the proxy. Other servers don't expose an unload, so `u` on their rows just says so.
 
 ## Non-goals
 
-- Not a chat client (oterm exists).
-- Not a cloud/agent cost tracker (aitop exists).
-- Not a cluster ops tool (InfraWhisperer/llmtop exists).
-- No telemetry, no accounts, no cloud. It's a local tool for local AI; that stance is part of the appeal.
+- Not a chat client.
+- Not a cloud-spend tracker.
+- Not cluster ops.
+- No telemetry, no accounts, no cloud. Local tool for local AI.
 
-## Risks, stated plainly
+## Known risks
 
-- Ollama could ship a built-in `ollama top`. Mitigation: multi-backend is the moat — the tool's value is one view across Ollama + llama.cpp + LM Studio + GPU, which no single vendor will build.
-- Category could cool. Mitigation: it's a real recurring-use tool either way; worst case it's a strong portfolio piece with modest stars.
-- Proxy mode requires users to change one env var — some won't bother, and they'll see an emptier tool. Mitigation: models + GPU panes are useful with zero setup, and the empty REQUESTS pane sells the upgrade in one line.
-- First Go project + first TUI at once. Mitigation: bubbletea has mature examples for exactly this shape (lazygit lineage); fall back to .NET AOT in week 1 if velocity is wrong — the design survives the swap.
+Ollama could ship a built-in `ollama top` someday; the answer is that mtop's value is one view across four servers plus the GPU, which no single vendor will build. The proxy needs a one-line config change and some people won't bother — that's fine, half the tool works without it. And tok/s for openai-style requests includes prompt processing (wall clock), which is documented rather than hidden.

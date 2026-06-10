@@ -19,21 +19,47 @@ type Stats struct {
 }
 
 type Reader struct {
-	path string
+	nvidia string
+	amd    string
+	mac    bool
 }
 
 func New() *Reader {
-	p, err := exec.LookPath("nvidia-smi")
-	if err != nil {
-		return &Reader{}
+	r := &Reader{mac: macSupported()}
+	if p, err := exec.LookPath("nvidia-smi"); err == nil {
+		r.nvidia = p
 	}
-	return &Reader{path: p}
+	if p, err := exec.LookPath("rocm-smi"); err == nil {
+		r.amd = p
+	}
+	return r
 }
 
-func (r *Reader) Available() bool { return r.path != "" }
+func (r *Reader) Available() bool { return r.nvidia != "" || r.amd != "" || r.mac }
 
 func (r *Reader) Read() ([]Stats, error) {
-	out, err := exec.Command(r.path,
+	var all []Stats
+	var lastErr error
+	if r.nvidia != "" {
+		s, err := readNvidia(r.nvidia)
+		all, lastErr = append(all, s...), err
+	}
+	if r.amd != "" {
+		s, err := readAMD(r.amd)
+		all, lastErr = append(all, s...), err
+	}
+	if r.mac {
+		s, err := readMac()
+		all, lastErr = append(all, s...), err
+	}
+	if len(all) > 0 {
+		return all, nil
+	}
+	return nil, lastErr
+}
+
+func readNvidia(path string) ([]Stats, error) {
+	out, err := exec.Command(path,
 		"--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
 		"--format=csv,noheader,nounits").Output()
 	if err != nil {
