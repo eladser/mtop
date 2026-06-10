@@ -1,6 +1,4 @@
-# mtop
-
-htop for your local AI.
+![mtop — htop for your local AI](docs/img/banner.png)
 
 ![demo](docs/img/demo.gif)
 
