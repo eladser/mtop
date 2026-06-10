@@ -85,13 +85,24 @@ type ModelStat struct {
 	OutTk    int
 }
 
-// ByModel aggregates everything seen so far, busiest model first.
-func (s *Store) ByModel() []ModelStat {
+func (s *Store) snapshot() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	out := make([]Request, len(s.reqs))
+	copy(out, s.reqs)
+	return out
+}
+
+// ByModel aggregates everything seen so far, busiest model first.
+func (s *Store) ByModel() []ModelStat { return byModel(s.snapshot()) }
+
+// Percentiles of tok/s across everything in the buffer.
+func (s *Store) Percentiles() (p50, p95 float64) { return percentiles(s.snapshot()) }
+
+func byModel(reqs []Request) []ModelStat {
 	rates := map[string][]float64{}
 	out := map[string]int{}
-	for _, r := range s.reqs {
+	for _, r := range reqs {
 		rates[r.Model] = append(rates[r.Model], r.TokSec)
 		out[r.Model] += r.OutTk
 	}
@@ -115,12 +126,9 @@ func (s *Store) ByModel() []ModelStat {
 	return all
 }
 
-// Percentiles of tok/s across everything in the buffer.
-func (s *Store) Percentiles() (p50, p95 float64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rs := make([]float64, 0, len(s.reqs))
-	for _, r := range s.reqs {
+func percentiles(reqs []Request) (p50, p95 float64) {
+	rs := make([]float64, 0, len(reqs))
+	for _, r := range reqs {
 		rs = append(rs, r.TokSec)
 	}
 	sort.Float64s(rs)
@@ -135,15 +143,17 @@ func pct(sorted []float64, q float64) float64 {
 }
 
 // PromText renders what the proxy has seen in prometheus exposition
-// format, served at /metrics on the proxy port.
+// format, served at /metrics on the proxy port. One snapshot so the
+// per-model lines and the percentiles describe the same set of requests.
 func (s *Store) PromText() string {
+	reqs := s.snapshot()
 	var b strings.Builder
-	for _, m := range s.ByModel() {
+	for _, m := range byModel(reqs) {
 		fmt.Fprintf(&b, "mtop_requests_total{model=%q} %d\n", m.Model, m.Count)
 		fmt.Fprintf(&b, "mtop_tokens_out_total{model=%q} %d\n", m.Model, m.OutTk)
 		fmt.Fprintf(&b, "mtop_tok_per_s_avg{model=%q} %.1f\n", m.Model, m.AvgTok)
 	}
-	p50, p95 := s.Percentiles()
+	p50, p95 := percentiles(reqs)
 	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.5\"} %.1f\n", p50)
 	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.95\"} %.1f\n", p95)
 	return b.String()

@@ -156,6 +156,43 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
+func TestGuardBlocksCrossOriginAndRebinding(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"models":[]}`))
+	}))
+	defer upstream.Close()
+
+	front := proxyFor(t, upstream.URL, NewStore(10))
+
+	do := func(setup func(*http.Request)) int {
+		req, _ := http.NewRequest("POST", front.URL+"/api/delete", strings.NewReader(`{"name":"x"}`))
+		setup(req)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// a normal cli-style call: loopback host, no Origin
+	if code := do(func(r *http.Request) {}); code == http.StatusForbidden {
+		t.Fatal("a plain loopback request should pass")
+	}
+	// a browser page on evil.com fetching the loopback proxy
+	if code := do(func(r *http.Request) { r.Header.Set("Origin", "http://evil.com") }); code != http.StatusForbidden {
+		t.Fatalf("cross-origin request should be blocked, got %d", code)
+	}
+	// dns rebinding: the rebound request still carries the attacker host
+	if code := do(func(r *http.Request) { r.Host = "evil.com:4321" }); code != http.StatusForbidden {
+		t.Fatalf("non-loopback host should be blocked, got %d", code)
+	}
+	// a local web app talking to it is fine
+	if code := do(func(r *http.Request) { r.Header.Set("Origin", "http://localhost:3000") }); code == http.StatusForbidden {
+		t.Fatal("a same-machine web app should pass")
+	}
+}
+
 func TestHugeBodyStaysIntact(t *testing.T) {
 	// past the buffer cap the tap stops looking for metrics, but the
 	// client still has to receive every byte

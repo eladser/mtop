@@ -27,6 +27,7 @@ const maxBuf = 1 << 20
 type Proxy struct {
 	target *url.URL
 	store  *Store
+	host   string // listen hostname, allowed alongside loopback
 }
 
 func New(upstream string, store *Store) (*Proxy, error) {
@@ -47,7 +48,49 @@ func (p *Proxy) Handler() http.Handler {
 		io.WriteString(w, p.store.PromText())
 	})
 	mux.Handle("/", rp)
-	return mux
+	return p.guard(mux)
+}
+
+// guard keeps a web page from driving the local ollama api behind your
+// back. The proxy forwards everything to ollama, including destructive
+// endpoints like /api/delete, so a page you happen to have open could
+// otherwise POST to 127.0.0.1:4321 (the browser sits on your loopback
+// too) or rebind dns to read your model list. CLI clients and SDKs
+// don't send Origin and call with a loopback Host, so they pass.
+func (p *Proxy) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// an empty Host can't come from a browser (they always send one),
+		// so it's some plain client; let it through
+		if r.Host != "" && !p.ok(hostname(r.Host)) {
+			http.Error(w, "blocked: unexpected host", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" {
+			u, err := url.Parse(o)
+			if err != nil || !p.ok(u.Hostname()) {
+				http.Error(w, "blocked: cross-origin request", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ok allows loopback and whatever host the proxy was told to listen on
+// (so an intentional lan bind still works for its own address).
+func (p *Proxy) ok(host string) bool {
+	if host == "localhost" || host == p.host {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func hostname(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
 }
 
 // tapTransport wraps the response body of generation endpoints so the
@@ -76,11 +119,12 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (p *Proxy) Listen(addr string) error {
+	p.host = hostname(addr)
 	// prompts go through this port as plain http, so binding anything
 	// beyond loopback deserves a heads-up
-	if host, _, err := net.SplitHostPort(addr); err == nil && host != "localhost" {
-		ip := net.ParseIP(host)
-		if host == "" || host == "0.0.0.0" || host == "::" || (ip != nil && !ip.IsLoopback()) {
+	if p.host != "localhost" {
+		ip := net.ParseIP(p.host)
+		if p.host == "" || p.host == "0.0.0.0" || p.host == "::" || (ip != nil && !ip.IsLoopback()) {
 			fmt.Fprintln(os.Stderr, "warning: proxy is reachable from the network, with no tls and no auth")
 		}
 	}
@@ -199,7 +243,7 @@ func (t *tap) recordOpenAI(line []byte) {
 }
 
 func (t *tap) Close() error {
-	if !t.done {
+	if !t.done && t.buf.Len() < maxBuf {
 		t.record(t.buf.Bytes())
 	}
 	return t.rc.Close()

@@ -44,7 +44,10 @@ func main() {
 	}
 
 	store := proxy.NewStore(256)
-	if !*noProxy {
+	proxyAddr := *listen
+	if *noProxy {
+		proxyAddr = ""
+	} else {
 		p, err := proxy.New(*target, store)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "bad -target url:", err)
@@ -58,7 +61,7 @@ func main() {
 	}
 
 	scan := sources.New(ollama.New(*upstream), *llamacpp, *lmstudio, *vllm)
-	app := ui.New(scan, gpu.New(), store, *listen, version, *idle)
+	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle)
 	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
