@@ -41,6 +41,8 @@ The proxy is the only piece that needs anything from the user: one env var (`OLL
 
 Traffic through the proxy is plain http with no auth, which is fine on loopback and a bad idea anywhere else — binding `-listen` to a non-loopback address prints a warning saying so.
 
+The proxy forwards everything to ollama, including endpoints that delete or pull models, so it checks the Host and Origin on the way in. A request has to arrive with a loopback Host (or the address you bound to), and any Origin header has to be local. That blocks a web page you have open from POSTing to the proxy or rebinding dns to read it — the browser shares your loopback, so binding to 127.0.0.1 isn't enough on its own. CLI clients and SDKs send neither header and call with a loopback Host, so they're unaffected.
+
 `/metrics` on the proxy port re-exports what the tap has seen, prometheus format.
 
 ## Stack

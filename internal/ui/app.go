@@ -215,8 +215,12 @@ func (a *App) statusLine() string {
 	if alert := a.gpuAlert(); alert != "" {
 		return warnSt.Render("  " + alert)
 	}
-	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · q quit · proxy on %s · v%s",
-		map[bool]string{true: "requests", false: "by model"}[a.byModel], a.listen, a.version)
+	proxy := "proxy off"
+	if a.listen != "" {
+		proxy = "proxy on " + a.listen
+	}
+	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · q quit · %s · v%s",
+		map[bool]string{true: "requests", false: "by model"}[a.byModel], proxy, a.version)
 	if a.flash != "" && time.Since(a.flashAt) < 12*time.Second {
 		st := selSt
 		if !a.flashOk {

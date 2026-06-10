@@ -78,6 +78,6 @@ AMD works if `rocm-smi` is installed. On Apple Silicon you get unified-memory nu
 Ollama reports its own generation timings, so that number is pure decode speed. OpenAI-style responses don't carry timings, so mtop divides tokens by wall time — prompt processing included. Close, but not the same thing.
 
 **Is anything sent anywhere?**
-No. No telemetry, no accounts. The only network calls are to your own servers.
+No. No telemetry, no accounts. The only network calls are to your own servers. The proxy also refuses cross-origin and non-loopback requests, so a web page you have open can't reach through it to your ollama API.
 
 [MIT](LICENSE)
