@@ -24,14 +24,14 @@ var version = "dev"
 func main() {
 	loadConf()
 
-	upstream := flag.String("ollama", envOr("MTOP_OLLAMA", "http://127.0.0.1:11434"), "ollama base url")
-	llamacpp := flag.String("llamacpp", envOr("MTOP_LLAMACPP", "http://127.0.0.1:8080"), "llama.cpp server url (empty to skip)")
-	lmstudio := flag.String("lmstudio", envOr("MTOP_LMSTUDIO", "http://127.0.0.1:1234"), "lm studio url (empty to skip)")
-	vllm := flag.String("vllm", envOr("MTOP_VLLM", "http://127.0.0.1:8000"), "vllm url (empty to skip)")
-	listen := flag.String("listen", envOr("MTOP_LISTEN", "127.0.0.1:4321"), "proxy listen address")
-	target := flag.String("target", envOr("MTOP_TARGET", ""), "proxy upstream (defaults to the ollama url)")
+	upstream := flag.String("ollama", cfg("MTOP_OLLAMA", "http://127.0.0.1:11434"), "ollama base url")
+	llamacpp := flag.String("llamacpp", cfg("MTOP_LLAMACPP", "http://127.0.0.1:8080"), "llama.cpp server url (empty to skip)")
+	lmstudio := flag.String("lmstudio", cfg("MTOP_LMSTUDIO", "http://127.0.0.1:1234"), "lm studio url (empty to skip)")
+	vllm := flag.String("vllm", cfg("MTOP_VLLM", "http://127.0.0.1:8000"), "vllm url (empty to skip)")
+	listen := flag.String("listen", cfg("MTOP_LISTEN", "127.0.0.1:4321"), "proxy listen address")
+	target := flag.String("target", cfg("MTOP_TARGET", ""), "proxy upstream (defaults to the ollama url)")
 	noProxy := flag.Bool("no-proxy", false, "don't run the request proxy")
-	idle := flag.Duration("idle-unload", envDur("MTOP_IDLE_UNLOAD"), "unload models with no traffic for this long (0 = off), e.g. 15m")
+	idle := flag.Duration("idle-unload", dur(cfg("MTOP_IDLE_UNLOAD", "")), "unload models with no traffic for this long (0 = off), e.g. 15m")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -65,8 +65,12 @@ func main() {
 	}
 }
 
+// values from ~/.mtop.conf, kept out of the process environment so
+// child processes like nvidia-smi don't inherit them
+var conf = map[string]string{}
+
 // ~/.mtop.conf holds MTOP_* keys, one per line, for things like
-// homelab hosts you don't want to retype. Real env vars win.
+// homelab hosts you don't want to retype.
 func loadConf() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -87,21 +91,24 @@ func loadConf() {
 		if !ok {
 			continue
 		}
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if strings.HasPrefix(k, "MTOP_") && os.Getenv(k) == "" {
-			os.Setenv(k, v)
+		if k = strings.TrimSpace(k); strings.HasPrefix(k, "MTOP_") {
+			conf[k] = strings.TrimSpace(v)
 		}
 	}
 }
 
-func envOr(k, def string) string {
+// real env vars win over the conf file
+func cfg(k, def string) string {
 	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	if v := conf[k]; v != "" {
 		return v
 	}
 	return def
 }
 
-func envDur(k string) time.Duration {
-	d, _ := time.ParseDuration(os.Getenv(k))
+func dur(s string) time.Duration {
+	d, _ := time.ParseDuration(s)
 	return d
 }

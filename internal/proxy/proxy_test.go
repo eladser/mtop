@@ -156,6 +156,29 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
+func TestHugeBodyStaysIntact(t *testing.T) {
+	// past the buffer cap the tap stops looking for metrics, but the
+	// client still has to receive every byte
+	huge := strings.Repeat("x", 2<<20)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"big","response":"`+huge+`","done":true,"eval_count":5,"eval_duration":1000000000}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/api/generate", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if len(body) < 2<<20 {
+		t.Fatalf("client got %d bytes, expected the whole response", len(body))
+	}
+}
+
 func TestLastSeen(t *testing.T) {
 	store := NewStore(10)
 	if !store.LastSeen("a").IsZero() {

@@ -8,21 +8,26 @@ package proxy
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"time"
 )
+
+// give up looking for the final chunk past this much buffered body; a
+// response that big loses its metrics, which beats holding it all in
+// memory if a server misbehaves
+const maxBuf = 1 << 20
 
 type Proxy struct {
 	target *url.URL
 	store  *Store
 }
-
-type startKey struct{}
 
 func New(upstream string, store *Store) (*Proxy, error) {
 	u, err := url.Parse(upstream)
@@ -34,24 +39,7 @@ func New(upstream string, store *Store) (*Proxy, error) {
 
 func (p *Proxy) Handler() http.Handler {
 	rp := httputil.NewSingleHostReverseProxy(p.target)
-	dir := rp.Director
-	rp.Director = func(req *http.Request) {
-		dir(req)
-		// keep bodies plain so we can read the chunks
-		req.Header.Del("Accept-Encoding")
-		*req = *req.WithContext(context.WithValue(req.Context(), startKey{}, time.Now()))
-	}
-	rp.ModifyResponse = func(resp *http.Response) error {
-		path := resp.Request.URL.Path
-		ollama := path == "/api/generate" || path == "/api/chat"
-		openai := path == "/v1/chat/completions" || path == "/v1/completions"
-		if !ollama && !openai {
-			return nil
-		}
-		started, _ := resp.Request.Context().Value(startKey{}).(time.Time)
-		resp.Body = &tap{rc: resp.Body, store: p.store, path: path, openai: openai, started: started}
-		return nil
-	}
+	rp.Transport = &tapTransport{store: p.store}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +50,40 @@ func (p *Proxy) Handler() http.Handler {
 	return mux
 }
 
+// tapTransport wraps the response body of generation endpoints so the
+// chunks can be read as they stream through.
+type tapTransport struct {
+	store *Store
+}
+
+func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// keep bodies plain so we can read the chunks
+	req.Header.Del("Accept-Encoding")
+	// before the round trip, so openai wall-time includes prompt processing
+	started := time.Now()
+
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	path := req.URL.Path
+	ollama := path == "/api/generate" || path == "/api/chat"
+	openai := path == "/v1/chat/completions" || path == "/v1/completions"
+	if ollama || openai {
+		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, started: started}
+	}
+	return resp, nil
+}
+
 func (p *Proxy) Listen(addr string) error {
+	// prompts go through this port as plain http, so binding anything
+	// beyond loopback deserves a heads-up
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "localhost" {
+		ip := net.ParseIP(host)
+		if host == "" || host == "0.0.0.0" || host == "::" || (ip != nil && !ip.IsLoopback()) {
+			fmt.Fprintln(os.Stderr, "warning: proxy is reachable from the network, with no tls and no auth")
+		}
+	}
 	return http.ListenAndServe(addr, p.Handler())
 }
 
@@ -91,7 +112,7 @@ type tap struct {
 
 func (t *tap) Read(b []byte) (int, error) {
 	n, err := t.rc.Read(b)
-	if n > 0 && !t.done {
+	if n > 0 && !t.done && t.buf.Len() < maxBuf {
 		t.buf.Write(b[:n])
 		t.drain()
 	}
