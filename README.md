@@ -1,4 +1,4 @@
-![mtop — htop for your local AI](docs/img/banner.png)
+![mtop - htop for your local AI](docs/img/banner.png)
 
 ![demo](docs/img/demo.gif)
 
@@ -38,6 +38,19 @@ The same port answers `/metrics` in prometheus format if you'd rather watch it f
 | `c` | swap recent requests for per-model stats |
 | `q` | quit |
 
+## Comparing models
+
+`mtop compare` runs the same prompt past a few ollama models, one at a time so they're not fighting for the GPU, and prints how each did:
+
+```
+$ mtop compare "explain tcp in one sentence" qwen3:0.6b smollm2:135m
+MODEL                         TOK/S      OUT      TOTAL
+qwen3:0.6b                    798.1      175      446ms
+smollm2:135m                  795.3       29     10.72s
+```
+
+tok/s is decode speed; TOTAL is wall-clock and includes the model load on the first call. Point it at another box with `-ollama`.
+
 ## Flags
 
 ```
@@ -48,6 +61,8 @@ The same port answers `/metrics` in prometheus format if you'd rather watch it f
 -listen       proxy listen address        (default 127.0.0.1:4321)
 -target       proxy upstream              (defaults to the ollama url)
 -idle-unload  unload models idle this long, e.g. 15m (default off)
+-notify       desktop notification when a gpu hits the alert line
+-history      keep recent requests across restarts (~/.mtop/history.jsonl)
 -no-proxy     don't run the proxy
 ```
 
@@ -72,7 +87,7 @@ Ollama said it'd unload a model by a certain time and didn't. Press `u`, or set 
 Start it with `--metrics` (and `--slots`) for the kv-cache numbers. Without those flags it only hands out the model name.
 
 **AMD? Mac?**
-AMD works if `rocm-smi` is installed. Apple Silicon gives you the unified-memory figure. Real GPU utilization on a Mac needs `powermetrics`, which wants root, so that part isn't in yet.
+AMD works if `rocm-smi` is installed. Apple Silicon gives you the unified-memory figure on its own. GPU utilization there comes from `powermetrics`, which needs root, so run mtop with `sudo` on a Mac if you want that number too.
 
 **tok/s looks different between ollama and openai-style requests.**
 Ollama reports its own generation timings, so that number is real decode speed. OpenAI-style responses carry no timings, so mtop divides tokens by wall-clock time, which folds in prompt processing. Close, not identical.

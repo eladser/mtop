@@ -33,6 +33,7 @@ type App struct {
 	listen    string
 	version   string
 	idleAfter time.Duration
+	notify    func(string)
 
 	w, h    int
 	sel     int
@@ -45,15 +46,16 @@ type App struct {
 	gpuErr  error
 
 	// when mtop first saw each model loaded, for idle tracking
-	seen    map[string]time.Time
-	flash   string
-	flashAt time.Time
-	flashOk bool
+	seen     map[string]time.Time
+	lastNote string // last gpu alert we fired a notification for
+	flash    string
+	flashAt  time.Time
+	flashOk  bool
 }
 
-func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration) *App {
+func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string)) *App {
 	return &App{scan: scan, gpu: g, store: store, listen: listen, version: version,
-		idleAfter: idleAfter, seen: map[string]time.Time{}}
+		idleAfter: idleAfter, notify: notify, seen: map[string]time.Time{}}
 }
 
 type tick struct{}
@@ -145,6 +147,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case data:
 		a.rows, a.alive, a.disk, a.ollErr = m.rows, m.alive, m.disk, m.ollErr
 		a.gpus, a.gpuErr = m.gpus, m.gpuErr
+		a.store.SetGPU(samples(a.gpus))
+		// fire a desktop notification when an alert first shows up, and
+		// again only if the alert text changes
+		if note := a.gpuAlert(); a.notify != nil && note != "" && note != a.lastNote {
+			a.notify(note)
+			a.lastNote = note
+		} else if note == "" {
+			a.lastNote = ""
+		}
 		if a.sel >= len(a.rows) {
 			a.sel = max(0, len(a.rows)-1)
 		}
@@ -234,7 +245,7 @@ func (a *App) statusLine() string {
 func (a *App) gpuAlert() string {
 	for _, g := range a.gpus {
 		if g.MemTotal > 0 && g.MemUsed*100/g.MemTotal >= 93 {
-			return fmt.Sprintf("%s memory is at %d%% — press u on what you can spare", g.Name, g.MemUsed*100/g.MemTotal)
+			return fmt.Sprintf("%s memory is at %d%%, press u on what you can spare", g.Name, g.MemUsed*100/g.MemTotal)
 		}
 		if g.Temp >= 87 {
 			return fmt.Sprintf("%s is at %d°C", g.Name, g.Temp)
@@ -257,9 +268,9 @@ func (a *App) modelsPane(w int) string {
 	multi := len(a.alive) > 1
 	switch {
 	case a.ollErr != nil && len(a.rows) == 0:
-		b.WriteString("\n" + dimSt.Render("ollama not reachable — is it running?"))
+		b.WriteString("\n" + dimSt.Render("ollama not reachable, is it running?"))
 	case len(a.rows) == 0:
-		b.WriteString("\n" + dimSt.Render("nothing loaded — run a model and it shows up here"))
+		b.WriteString("\n" + dimSt.Render("nothing loaded, run a model and it shows up here"))
 	default:
 		head := fmt.Sprintf("%-22s %8s %6s %6s  %s", "NAME", "SIZE", "QUANT", "VRAM", "TTL")
 		if multi {
@@ -297,7 +308,7 @@ func (a *App) modelLine(r sources.Row, multi bool) string {
 func ttlFor(r sources.Row) string {
 	switch {
 	case overdue(r):
-		return "overdue — press u"
+		return "overdue, press u"
 	case r.Expires.IsZero() && r.Note != "":
 		return r.Note
 	case r.Expires.IsZero():
@@ -327,7 +338,9 @@ func (a *App) gpuPane() string {
 	case a.gpuErr != nil:
 		b.WriteString("\n" + dimSt.Render("gpu read failed: "+a.gpuErr.Error()))
 	default:
+		var totMiB int
 		for _, g := range a.gpus {
+			totMiB += g.MemTotal
 			pct := 0
 			if g.MemTotal > 0 {
 				pct = g.MemUsed * 100 / g.MemTotal
@@ -340,8 +353,28 @@ func (a *App) gpuPane() string {
 				"util %3d%%  mem %d/%d MiB (%d%%)  %d°C  %.0fW",
 				g.Util, g.MemUsed, g.MemTotal, pct, g.Temp, g.Power)))
 		}
+		// how much of that the loaded models account for
+		var modelB int64
+		for _, r := range a.rows {
+			modelB += r.VRAM
+		}
+		if modelB > 0 && totMiB > 0 {
+			b.WriteString("\n" + dimSt.Render(fmt.Sprintf("models holding %s of %.1fG",
+				gib(modelB), float64(totMiB)/1024)))
+		}
 	}
 	return b.String()
+}
+
+func samples(gs []gpu.Stats) []proxy.GPUSample {
+	out := make([]proxy.GPUSample, len(gs))
+	for i, g := range gs {
+		out[i] = proxy.GPUSample{
+			Name: g.Name, Util: g.Util, MemUsed: g.MemUsed,
+			MemTotal: g.MemTotal, Temp: g.Temp, Power: g.Power,
+		}
+	}
+	return out
 }
 
 func (a *App) requestsPane() string {
@@ -353,7 +386,7 @@ func (a *App) requestsPane() string {
 	}
 	reqs := a.store.Recent(a.reqRows())
 	if len(reqs) == 0 {
-		b.WriteString("\n" + dimSt.Render("none yet — point your client at http://"+a.listen+" (e.g. OLLAMA_HOST="+a.listen+") to see live requests"))
+		b.WriteString("\n" + dimSt.Render("none yet. point your client at http://"+a.listen+" (e.g. OLLAMA_HOST="+a.listen+") to see live requests"))
 		return b.String()
 	}
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("%-9s %-26s %10s %6s %8s  %s", "TIME", "MODEL", "TOK/S", "OUT", "PROMPT", "TOTAL")))

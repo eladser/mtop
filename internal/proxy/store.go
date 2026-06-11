@@ -18,12 +18,25 @@ type Request struct {
 	Total    time.Duration
 }
 
+// GPUSample is the slice of GPU state /metrics re-exports. It's a copy
+// of what internal/gpu reads, kept here so this package doesn't import
+// it just to render some gauges.
+type GPUSample struct {
+	Name              string
+	Util              int
+	MemUsed, MemTotal int
+	Temp              int
+	Power             float64
+}
+
 // Store keeps the last N proxied requests, newest first.
 type Store struct {
-	mu   sync.Mutex
-	reqs []Request
-	max  int
-	err  error
+	mu    sync.Mutex
+	reqs  []Request
+	gpus  []GPUSample
+	max   int
+	err   error
+	onAdd func(Request)
 }
 
 func NewStore(max int) *Store {
@@ -32,11 +45,41 @@ func NewStore(max int) *Store {
 
 func (s *Store) Add(r Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.reqs = append([]Request{r}, s.reqs...)
 	if len(s.reqs) > s.max {
 		s.reqs = s.reqs[:s.max]
 	}
+	fn := s.onAdd
+	s.mu.Unlock()
+	if fn != nil {
+		fn(r)
+	}
+}
+
+// Preload drops in requests recovered from disk on startup. reqs is
+// newest-first like everything else here, and goes behind whatever's
+// already live. Doesn't fire onAdd, so loading doesn't re-write history.
+func (s *Store) Preload(reqs []Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reqs = append(s.reqs, reqs...)
+	if len(s.reqs) > s.max {
+		s.reqs = s.reqs[:s.max]
+	}
+}
+
+// OnAdd runs fn after each new request lands. Used to append history.
+func (s *Store) OnAdd(fn func(Request)) {
+	s.mu.Lock()
+	s.onAdd = fn
+	s.mu.Unlock()
+}
+
+// SetGPU stashes the latest GPU read so /metrics can include it.
+func (s *Store) SetGPU(g []GPUSample) {
+	s.mu.Lock()
+	s.gpus = g
+	s.mu.Unlock()
 }
 
 func (s *Store) Recent(n int) []Request {
@@ -146,7 +189,12 @@ func pct(sorted []float64, q float64) float64 {
 // format, served at /metrics on the proxy port. One snapshot so the
 // per-model lines and the percentiles describe the same set of requests.
 func (s *Store) PromText() string {
-	reqs := s.snapshot()
+	s.mu.Lock()
+	reqs := make([]Request, len(s.reqs))
+	copy(reqs, s.reqs)
+	gpus := s.gpus
+	s.mu.Unlock()
+
 	var b strings.Builder
 	for _, m := range byModel(reqs) {
 		fmt.Fprintf(&b, "mtop_requests_total{model=%q} %d\n", m.Model, m.Count)
@@ -156,6 +204,13 @@ func (s *Store) PromText() string {
 	p50, p95 := percentiles(reqs)
 	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.5\"} %.1f\n", p50)
 	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.95\"} %.1f\n", p95)
+	for _, g := range gpus {
+		fmt.Fprintf(&b, "mtop_gpu_util{gpu=%q} %d\n", g.Name, g.Util)
+		fmt.Fprintf(&b, "mtop_gpu_mem_used_mib{gpu=%q} %d\n", g.Name, g.MemUsed)
+		fmt.Fprintf(&b, "mtop_gpu_mem_total_mib{gpu=%q} %d\n", g.Name, g.MemTotal)
+		fmt.Fprintf(&b, "mtop_gpu_temp_c{gpu=%q} %d\n", g.Name, g.Temp)
+		fmt.Fprintf(&b, "mtop_gpu_power_w{gpu=%q} %.0f\n", g.Name, g.Power)
+	}
 	return b.String()
 }
 
