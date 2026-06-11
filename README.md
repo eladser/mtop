@@ -104,4 +104,4 @@ Ollama reports its own generation timings, so that number is real decode speed. 
 **Does it phone home?**
 Never. No accounts, no telemetry, it only talks to your own servers. The proxy also turns away cross-origin and non-loopback callers, so a browser tab can't reach through it to your ollama.
 
-[MIT](LICENSE)
+[MIT](LICENSE). If it's useful to you, [ko-fi.com/eladser](https://ko-fi.com/eladser).
