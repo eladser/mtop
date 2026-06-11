@@ -1,6 +1,6 @@
-# mtop — roadmap
+# mtop roadmap
 
-## 1.0 — shipped
+## 1.0 (shipped)
 
 - Ollama: loaded models, VRAM, ttl, on-disk count
 - GPU via nvidia-smi
@@ -9,7 +9,7 @@
 - Model unload: select + `u`, overdue markers, `-idle-unload` for the ones ollama forgets
 - Single binary, zero config, win/linux/mac
 
-## 1.1 — shipped
+## 1.1 (shipped)
 
 - llama.cpp, LM Studio and vLLM show up next to ollama, detected on their usual ports
 - OpenAI-style endpoints (`/v1/*`) counted by the proxy, so llama.cpp and LM Studio clients get tok/s too
@@ -19,15 +19,18 @@
 - Status-line alerts when GPU memory or temperature gets ugly
 - `~/.mtop.conf` for remote hosts
 
-## 1.2
+## 1.2 (shipped)
 
-- Real Apple GPU utilization — powermetrics wants root, so this needs a setuid helper or a polite "run me with sudo once" story
-- Per-model VRAM attribution where servers expose it
-- Model comparison: same prompt against two servers, side by side
-- Desktop notifications for the alerts that currently only color the status line
+- Apple GPU utilization from powermetrics when mtop runs as root, memory-only otherwise
+- Per-model VRAM rolled up against the GPU total in the GPU pane
+- `mtop compare`: same prompt across a few models, tok/s side by side
+- Desktop notifications for the GPU alerts (`-notify`)
+- GPU stats in the `/metrics` output, not just request counters
+- Requests survive a restart with `-history`
 
 ## Later / maybe
 
-- Prometheus scrape of GPU stats too (only request counters today)
-- Historical persistence across restarts
-- A fourth pane for embedding/reranker traffic if that ever feels missing in practice
+- powermetrics without sudo (a small signed helper, or live with the requirement)
+- Per-model VRAM on the non-ollama servers, if they ever expose it
+- Compare across two different servers, not just two ollama models
+- A pane for embedding/reranker traffic, if that ever feels missing in practice

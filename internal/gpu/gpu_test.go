@@ -33,6 +33,19 @@ func TestParseAMD(t *testing.T) {
 	}
 }
 
+func TestResidencyOf(t *testing.T) {
+	got, ok := residencyOf("GPU HW active residency:  42.50% (444 MHz: 12%)")
+	if !ok || got != 43 {
+		t.Fatalf("got %d ok=%v", got, ok)
+	}
+	if _, ok := residencyOf("GPU idle residency: 57.50%"); ok {
+		t.Fatal("idle line should not match")
+	}
+	if _, ok := residencyOf("some other line"); ok {
+		t.Fatal("unrelated line should not match")
+	}
+}
+
 func TestUsedFromVMStat(t *testing.T) {
 	out := "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 100.\nPages active: 1000.\nPages wired down: 500.\nPages occupied by compressor: 250.\n"
 	// (1000+500+250) * 16384 / 1MiB = 27
