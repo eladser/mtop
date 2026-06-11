@@ -28,9 +28,15 @@
 - GPU stats in the `/metrics` output, not just request counters
 - Requests survive a restart with `-history`
 
+## 1.3
+
+- Watch more than one host at once: give `-ollama` a comma-list and stack the models and GPUs from each box in the panes, for people running models on a couple of machines
+- GPU util and memory as sparklines over time, the same treatment the tok/s line already gets
+- Let `compare` hit the OpenAI endpoints too, so it's ollama vs llama.cpp on one prompt, not just two ollama models
+- Alert thresholds you can set: `-mem-alert` and `-temp-alert` instead of the hardcoded 93% and 87°C
+
 ## Later / maybe
 
 - powermetrics without sudo (a small signed helper, or live with the requirement)
 - Per-model VRAM on the non-ollama servers, if they ever expose it
-- Compare across two different servers, not just two ollama models
 - A pane for embedding/reranker traffic, if that ever feels missing in practice
