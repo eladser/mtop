@@ -8,11 +8,20 @@ It'll also kick out models that won't leave. Pick one, press `u`, gone. Ollama i
 
 ## Install
 
-Grab a binary from [releases](https://github.com/eladser/mtop/releases), or if you have Go:
+macOS or Linux:
 
 ```
-go install github.com/eladser/mtop@latest
+brew install eladser/tap/mtop
 ```
+
+Windows:
+
+```
+scoop bucket add eladser https://github.com/eladser/scoop-bucket
+scoop install mtop
+```
+
+Or grab a binary from [releases](https://github.com/eladser/mtop/releases), or build it with `go install github.com/eladser/mtop@latest`.
 
 Run `mtop`. It looks for the usual servers on their usual ports, no config file to write.
 
