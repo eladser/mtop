@@ -34,6 +34,8 @@
 - GPU util and memory as sparklines over time, the same treatment the tok/s line gets
 - `compare -openai <url>` runs the comparison against an OpenAI-style server (llama.cpp, LM Studio, vLLM), not just ollama
 - `-mem-alert` and `-temp-alert` flags instead of the hardcoded 93% and 87°C
+- request inspector (`i`, with `-inspect`): the last request's prompt, completion, and load/prompt/decode timing
+- session energy on the TOK/S line: watt-hours used and tokens per watt-hour, estimated from GPU power
 
 ## Later / maybe
 

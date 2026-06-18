@@ -10,14 +10,44 @@ import (
 )
 
 func proxyFor(t *testing.T, upstream string, store *Store) *httptest.Server {
+	return proxyForInspect(t, upstream, store, false)
+}
+
+func proxyForInspect(t *testing.T, upstream string, store *Store, inspect bool) *httptest.Server {
 	t.Helper()
-	p, err := New(upstream, store)
+	p, err := New(upstream, store, inspect)
 	if err != nil {
 		t.Fatal(err)
 	}
 	front := httptest.NewServer(p.Handler())
 	t.Cleanup(front.Close)
 	return front
+}
+
+func TestInspectCaptures(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"m","done":false,"response":"hello "}`+"\n")
+		io.WriteString(w, `{"model":"m","done":false,"response":"world"}`+"\n")
+		io.WriteString(w, `{"model":"m","done":true,"eval_count":2,"eval_duration":1000000000,"load_duration":500000000,"prompt_eval_duration":300000000}`+"\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyForInspect(t, upstream.URL, store, true)
+	resp, err := http.Post(front.URL+"/api/generate", "application/json", strings.NewReader(`{"prompt":"say hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	r := store.Recent(1)[0]
+	if r.Prompt != "say hi" || r.Completion != "hello world" {
+		t.Fatalf("bad capture: prompt=%q completion=%q", r.Prompt, r.Completion)
+	}
+	if r.Load == 0 || r.PromptEval == 0 {
+		t.Fatalf("timings not captured: %+v", r)
+	}
 }
 
 func TestStreamingChunks(t *testing.T) {

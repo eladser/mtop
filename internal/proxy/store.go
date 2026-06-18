@@ -9,13 +9,17 @@ import (
 )
 
 type Request struct {
-	When     time.Time
-	Path     string
-	Model    string
-	PromptTk int
-	OutTk    int
-	TokSec   float64
-	Total    time.Duration
+	When       time.Time
+	Path       string
+	Model      string
+	PromptTk   int
+	OutTk      int
+	TokSec     float64
+	Total      time.Duration
+	Load       time.Duration // model load time (ollama, inspector)
+	PromptEval time.Duration // prompt processing time (ollama, inspector)
+	Prompt     string        // captured only with -inspect
+	Completion string        // captured only with -inspect
 }
 
 // GPUSample is the slice of GPU state /metrics re-exports. It's a copy

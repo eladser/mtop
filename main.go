@@ -67,6 +67,7 @@ func runTop() {
 	history := flag.Bool("history", false, "remember recent requests across restarts (~/.mtop/history.jsonl)")
 	memAlert := flag.Int("mem-alert", 93, "gpu memory percent that turns the alert line on")
 	tempAlert := flag.Int("temp-alert", 87, "gpu temperature in celsius that turns the alert line on")
+	inspect := flag.Bool("inspect", false, "capture prompt and completion text so the inspector (i) can show them")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -89,7 +90,7 @@ func runTop() {
 	if *noProxy {
 		proxyAddr = ""
 	} else {
-		p, err := proxy.New(*target, store)
+		p, err := proxy.New(*target, store, *inspect)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "bad -target url:", err)
 			os.Exit(1)
@@ -113,7 +114,7 @@ func runTop() {
 		}
 	}
 	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm)
-	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert)
+	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert, *inspect)
 	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

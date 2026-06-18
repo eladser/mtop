@@ -16,6 +16,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -25,22 +26,23 @@ import (
 const maxBuf = 1 << 20
 
 type Proxy struct {
-	target *url.URL
-	store  *Store
-	host   string // listen hostname, allowed alongside loopback
+	target  *url.URL
+	store   *Store
+	host    string // listen hostname, allowed alongside loopback
+	inspect bool   // capture prompt/completion text too
 }
 
-func New(upstream string, store *Store) (*Proxy, error) {
+func New(upstream string, store *Store, inspect bool) (*Proxy, error) {
 	u, err := url.Parse(upstream)
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{target: u, store: store}, nil
+	return &Proxy{target: u, store: store, inspect: inspect}, nil
 }
 
 func (p *Proxy) Handler() http.Handler {
 	rp := httputil.NewSingleHostReverseProxy(p.target)
-	rp.Transport = &tapTransport{store: p.store}
+	rp.Transport = &tapTransport{store: p.store, inspect: p.inspect}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +98,8 @@ func hostname(hostport string) string {
 // tapTransport wraps the response body of generation endpoints so the
 // chunks can be read as they stream through.
 type tapTransport struct {
-	store *Store
+	store   *Store
+	inspect bool
 }
 
 func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -105,17 +108,60 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// before the round trip, so openai wall-time includes prompt processing
 	started := time.Now()
 
+	path := req.URL.Path
+	ollama := path == "/api/generate" || path == "/api/chat"
+	openai := path == "/v1/chat/completions" || path == "/v1/completions"
+
+	var prompt string
+	if t.inspect && (ollama || openai) && req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		prompt = promptOf(body)
+	}
+
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
-	path := req.URL.Path
-	ollama := path == "/api/generate" || path == "/api/chat"
-	openai := path == "/v1/chat/completions" || path == "/v1/completions"
 	if ollama || openai {
-		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, started: started}
+		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai,
+			started: started, inspect: t.inspect, prompt: prompt}
 	}
 	return resp, nil
+}
+
+// promptOf digs the user's text out of a request body, ollama or openai
+// shape, for the inspector. Best effort.
+func promptOf(body []byte) string {
+	var b struct {
+		Prompt   string `json:"prompt"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &b) != nil {
+		return ""
+	}
+	if b.Prompt != "" {
+		return clip(b.Prompt)
+	}
+	for i := len(b.Messages) - 1; i >= 0; i-- {
+		if b.Messages[i].Role == "user" {
+			return clip(b.Messages[i].Content)
+		}
+	}
+	return ""
+}
+
+// ponytail: 2 KB is plenty to eyeball a prompt; keeps memory bounded.
+func clip(s string) string {
+	const max = 2048
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 func (p *Proxy) Listen(addr string) error {
@@ -134,12 +180,18 @@ func (p *Proxy) Listen(addr string) error {
 // chunk is the slice of an ollama response we care about. The final
 // chunk (done:true) carries the counters; durations are nanoseconds.
 type chunk struct {
-	Model           string `json:"model"`
-	Done            bool   `json:"done"`
-	PromptEvalCount int    `json:"prompt_eval_count"`
-	EvalCount       int    `json:"eval_count"`
-	EvalDuration    int64  `json:"eval_duration"`
-	TotalDuration   int64  `json:"total_duration"`
+	Model    string `json:"model"`
+	Done     bool   `json:"done"`
+	Response string `json:"response"` // /api/generate
+	Message  struct {
+		Content string `json:"content"`
+	} `json:"message"` // /api/chat
+	PromptEvalCount    int   `json:"prompt_eval_count"`
+	EvalCount          int   `json:"eval_count"`
+	LoadDuration       int64 `json:"load_duration"`
+	PromptEvalDuration int64 `json:"prompt_eval_duration"`
+	EvalDuration       int64 `json:"eval_duration"`
+	TotalDuration      int64 `json:"total_duration"`
 }
 
 // tap reads through a (possibly streaming) body, recording the final
@@ -150,6 +202,9 @@ type tap struct {
 	path    string
 	openai  bool
 	started time.Time
+	inspect bool
+	prompt  string
+	comp    strings.Builder
 	buf     bytes.Buffer
 	done    bool
 }
@@ -189,20 +244,33 @@ func (t *tap) record(line []byte) {
 		return
 	}
 	var c chunk
-	if json.Unmarshal(line, &c) != nil || !c.Done {
+	if json.Unmarshal(line, &c) != nil {
+		return
+	}
+	if t.inspect && t.comp.Len() < 2048 {
+		t.comp.WriteString(c.Response)
+		t.comp.WriteString(c.Message.Content)
+	}
+	if !c.Done {
 		return
 	}
 	t.done = true
 	r := Request{
-		When:     time.Now(),
-		Path:     t.path,
-		Model:    c.Model,
-		PromptTk: c.PromptEvalCount,
-		OutTk:    c.EvalCount,
-		Total:    time.Duration(c.TotalDuration),
+		When:       time.Now(),
+		Path:       t.path,
+		Model:      c.Model,
+		PromptTk:   c.PromptEvalCount,
+		OutTk:      c.EvalCount,
+		Total:      time.Duration(c.TotalDuration),
+		Load:       time.Duration(c.LoadDuration),
+		PromptEval: time.Duration(c.PromptEvalDuration),
 	}
 	if c.EvalDuration > 0 {
 		r.TokSec = float64(c.EvalCount) / (float64(c.EvalDuration) / 1e9)
+	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		r.Completion = clip(t.comp.String())
 	}
 	t.store.Add(r)
 }
