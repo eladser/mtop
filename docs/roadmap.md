@@ -28,12 +28,12 @@
 - GPU stats in the `/metrics` output, not just request counters
 - Requests survive a restart with `-history`
 
-## 1.3
+## 1.3 (shipped)
 
-- Watch more than one host at once: give `-ollama` a comma-list and stack the models and GPUs from each box in the panes, for people running models on a couple of machines
-- GPU util and memory as sparklines over time, the same treatment the tok/s line already gets
-- Let `compare` hit the OpenAI endpoints too, so it's ollama vs llama.cpp on one prompt, not just two ollama models
-- Alert thresholds you can set: `-mem-alert` and `-temp-alert` instead of the hardcoded 93% and 87°C
+- Watch more than one host: `-ollama` takes a comma-list and stacks each box's models in the panes, labelled by host
+- GPU util and memory as sparklines over time, the same treatment the tok/s line gets
+- `compare -openai <url>` runs the comparison against an OpenAI-style server (llama.cpp, LM Studio, vLLM), not just ollama
+- `-mem-alert` and `-temp-alert` flags instead of the hardcoded 93% and 87°C
 
 ## Later / maybe
 

@@ -3,6 +3,7 @@ package sources
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/eladser/mtop/internal/ollama"
@@ -54,7 +55,7 @@ func TestScanMergesSources(t *testing.T) {
 	}))
 	defer lms.Close()
 
-	s := New(ollama.New(oll.URL), lcpp.URL, lms.URL, "")
+	s := New([]*ollama.Client{ollama.New(oll.URL)}, lcpp.URL, lms.URL, "")
 	rows, alive, ollErr := s.Scan()
 	if ollErr != nil {
 		t.Fatal(ollErr)
@@ -76,8 +77,36 @@ func TestScanMergesSources(t *testing.T) {
 	}
 }
 
+func TestScanMultiHost(t *testing.T) {
+	mk := func(model string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/ps" {
+				w.Write([]byte(`{"models":[{"name":"` + model + `","details":{}}]}`))
+			} else {
+				w.Write([]byte(`{"models":[]}`))
+			}
+		}))
+	}
+	a, b := mk("alpha"), mk("beta")
+	defer a.Close()
+	defer b.Close()
+
+	rows, alive, err := New([]*ollama.Client{ollama.New(a.URL), ollama.New(b.URL)}, "", "", "").Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || len(alive) != 1 {
+		t.Fatalf("want 2 rows, 1 alive entry; got %d rows %v", len(rows), alive)
+	}
+	for _, r := range rows {
+		if !strings.HasPrefix(r.From, "ollama@") {
+			t.Fatalf("multi-host rows should be labelled by host, got %q", r.From)
+		}
+	}
+}
+
 func TestScanDeadSources(t *testing.T) {
-	s := New(ollama.New("http://127.0.0.1:1"), "http://127.0.0.1:1", "", "")
+	s := New([]*ollama.Client{ollama.New("http://127.0.0.1:1")}, "http://127.0.0.1:1", "", "")
 	rows, alive, ollErr := s.Scan()
 	if ollErr == nil {
 		t.Fatal("expected ollama error")

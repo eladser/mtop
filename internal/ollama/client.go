@@ -18,6 +18,16 @@ func New(base string) *Client {
 	return &Client{base: base, hc: &http.Client{Timeout: 3 * time.Second}}
 }
 
+// Host is the bare host:port of the server, for labelling rows when
+// more than one ollama is being watched.
+func (c *Client) Host() string {
+	s := c.base
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	return strings.TrimSuffix(s, "/")
+}
+
 type Model struct {
 	Name      string    `json:"name"`
 	Size      int64     `json:"size"`

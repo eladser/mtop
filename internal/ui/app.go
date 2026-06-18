@@ -34,6 +34,8 @@ type App struct {
 	version   string
 	idleAfter time.Duration
 	notify    func(string)
+	memAlert  int
+	tempAlert int
 
 	w, h    int
 	sel     int
@@ -47,15 +49,19 @@ type App struct {
 
 	// when mtop first saw each model loaded, for idle tracking
 	seen     map[string]time.Time
-	lastNote string // last gpu alert we fired a notification for
+	gpuHist  map[string]*trace // util/mem history per gpu, for sparklines
+	lastNote string            // last gpu alert we fired a notification for
 	flash    string
 	flashAt  time.Time
 	flashOk  bool
 }
 
-func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string)) *App {
+type trace struct{ util, mem []float64 }
+
+func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string), memAlert, tempAlert int) *App {
 	return &App{scan: scan, gpu: g, store: store, listen: listen, version: version,
-		idleAfter: idleAfter, notify: notify, seen: map[string]time.Time{}}
+		idleAfter: idleAfter, notify: notify, memAlert: memAlert, tempAlert: tempAlert,
+		seen: map[string]time.Time{}, gpuHist: map[string]*trace{}}
 }
 
 type tick struct{}
@@ -148,6 +154,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.rows, a.alive, a.disk, a.ollErr = m.rows, m.alive, m.disk, m.ollErr
 		a.gpus, a.gpuErr = m.gpus, m.gpuErr
 		a.store.SetGPU(samples(a.gpus))
+		a.recordGPU()
 		// fire a desktop notification when an alert first shows up, and
 		// again only if the alert text changes
 		if note := a.gpuAlert(); a.notify != nil && note != "" && note != a.lastNote {
@@ -244,14 +251,37 @@ func (a *App) statusLine() string {
 
 func (a *App) gpuAlert() string {
 	for _, g := range a.gpus {
-		if g.MemTotal > 0 && g.MemUsed*100/g.MemTotal >= 93 {
+		if g.MemTotal > 0 && g.MemUsed*100/g.MemTotal >= a.memAlert {
 			return fmt.Sprintf("%s memory is at %d%%, press u on what you can spare", g.Name, g.MemUsed*100/g.MemTotal)
 		}
-		if g.Temp >= 87 {
+		if g.Temp >= a.tempAlert {
 			return fmt.Sprintf("%s is at %d°C", g.Name, g.Temp)
 		}
 	}
 	return ""
+}
+
+// recordGPU keeps the last 40 util and mem% samples per gpu for the
+// sparklines. ponytail: 40 is just what fits, not configurable.
+func (a *App) recordGPU() {
+	const keep = 40
+	for _, g := range a.gpus {
+		t := a.gpuHist[g.Name]
+		if t == nil {
+			t = &trace{}
+			a.gpuHist[g.Name] = t
+		}
+		mem := 0.0
+		if g.MemTotal > 0 {
+			mem = float64(g.MemUsed) * 100 / float64(g.MemTotal)
+		}
+		t.util = append(t.util, float64(g.Util))
+		t.mem = append(t.mem, mem)
+		if len(t.util) > keep {
+			t.util = t.util[len(t.util)-keep:]
+			t.mem = t.mem[len(t.mem)-keep:]
+		}
+	}
 }
 
 func (a *App) modelsPane(w int) string {
@@ -346,12 +376,16 @@ func (a *App) gpuPane() string {
 				pct = g.MemUsed * 100 / g.MemTotal
 			}
 			st := lipgloss.NewStyle()
-			if pct >= 93 || g.Temp >= 87 {
+			if pct >= a.memAlert || g.Temp >= a.tempAlert {
 				st = warnSt
 			}
 			b.WriteString("\n" + g.Name + "\n" + st.Render(fmt.Sprintf(
 				"util %3d%%  mem %d/%d MiB (%d%%)  %d°C  %.0fW",
 				g.Util, g.MemUsed, g.MemTotal, pct, g.Temp, g.Power)))
+			if t := a.gpuHist[g.Name]; t != nil && len(t.util) > 1 {
+				b.WriteString("\n" + dimSt.Render("util ") + selSt.Render(sparkPct(t.util)) +
+					dimSt.Render("  mem ") + selSt.Render(sparkPct(t.mem)))
+			}
 		}
 		// how much of that the loaded models account for
 		var modelB int64

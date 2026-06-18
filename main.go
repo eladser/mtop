@@ -36,8 +36,9 @@ func main() {
 func runCompare(args []string) {
 	fs := flag.NewFlagSet("compare", flag.ExitOnError)
 	base := fs.String("ollama", cfg("MTOP_OLLAMA", "http://127.0.0.1:11434"), "ollama base url")
+	openai := fs.String("openai", "", "openai-style base url instead of ollama, e.g. http://127.0.0.1:8080/v1")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `usage: mtop compare [-ollama url] "<prompt>" model [model ...]`)
+		fmt.Fprintln(os.Stderr, `usage: mtop compare [-ollama url | -openai url] "<prompt>" model [model ...]`)
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)
@@ -45,6 +46,10 @@ func runCompare(args []string) {
 	if len(rest) < 2 {
 		fs.Usage()
 		os.Exit(2)
+	}
+	if *openai != "" {
+		fmt.Print(compare.Table(compare.RunOpenAI(*openai, rest[0], rest[1:])))
+		return
 	}
 	fmt.Print(compare.Table(compare.Run(*base, rest[0], rest[1:])))
 }
@@ -60,6 +65,8 @@ func runTop() {
 	idle := flag.Duration("idle-unload", dur(cfg("MTOP_IDLE_UNLOAD", "")), "unload models with no traffic for this long (0 = off), e.g. 15m")
 	notifyOn := flag.Bool("notify", false, "desktop notification when a gpu hits the alert line")
 	history := flag.Bool("history", false, "remember recent requests across restarts (~/.mtop/history.jsonl)")
+	memAlert := flag.Int("mem-alert", 93, "gpu memory percent that turns the alert line on")
+	tempAlert := flag.Int("temp-alert", 87, "gpu temperature in celsius that turns the alert line on")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -67,8 +74,10 @@ func runTop() {
 		fmt.Println("mtop", version)
 		return
 	}
+	// -ollama can be a comma list to watch a few boxes at once
+	hosts := strings.Split(*upstream, ",")
 	if *target == "" {
-		*target = *upstream
+		*target = strings.TrimSpace(hosts[0])
 	}
 
 	store := proxy.NewStore(256)
@@ -97,8 +106,14 @@ func runTop() {
 		notifier = func(msg string) { notify.Send("mtop", msg) }
 	}
 
-	scan := sources.New(ollama.New(*upstream), *llamacpp, *lmstudio, *vllm)
-	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier)
+	var olls []*ollama.Client
+	for _, h := range hosts {
+		if h = strings.TrimSpace(h); h != "" {
+			olls = append(olls, ollama.New(h))
+		}
+	}
+	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm)
+	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert)
 	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
