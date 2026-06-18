@@ -549,11 +549,12 @@ func wrap(s string, width int) string {
 	}
 	var out []string
 	for _, line := range strings.Split(s, "\n") {
-		for len(line) > width {
-			out = append(out, line[:width])
-			line = line[width:]
+		r := []rune(line) // slice runes, not bytes, so we don't cut a utf-8 char
+		for len(r) > width {
+			out = append(out, string(r[:width]))
+			r = r[width:]
 		}
-		out = append(out, line)
+		out = append(out, string(r))
 		if len(out) >= 12 {
 			out = append(out, dimSt.Render("…"))
 			return strings.Join(out, "\n")

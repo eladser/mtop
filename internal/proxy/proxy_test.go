@@ -24,6 +24,16 @@ func proxyForInspect(t *testing.T, upstream string, store *Store, inspect bool) 
 	return front
 }
 
+func TestClipStripsControlBytes(t *testing.T) {
+	got := clip("hi\x1b]52;c;evil\x07 there\nok\tgo")
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) {
+		t.Fatalf("escape bytes survived: %q", got)
+	}
+	if !strings.Contains(got, "hi") || !strings.Contains(got, "there") || !strings.Contains(got, "\n") || !strings.Contains(got, "\t") {
+		t.Fatalf("dropped text it should keep: %q", got)
+	}
+}
+
 func TestInspectCaptures(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"model":"m","done":false,"response":"hello "}`+"\n")

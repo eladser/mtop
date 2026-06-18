@@ -49,6 +49,8 @@ The proxy forwards everything to ollama, including the endpoints that delete or 
 
 With `-history` the proxied requests get appended to `~/.mtop/history.jsonl` and read back on the next start, so the stats panes aren't empty after a restart. The file is trimmed to the last 256 on load. `-notify` fires a desktop notification (osascript, notify-send, or a powershell toast, whatever the OS has) the first time a GPU crosses the alert line.
 
+`-ollama` takes a comma-list to watch several boxes at once; rows get tagged by host. `-inspect` keeps the prompt and completion text (control bytes stripped so a model can't smuggle escape sequences into the terminal, 2 KB cap) so pressing `i` shows the last request in full with its load/prompt/decode split. The GPU pane carries util and memory sparklines, and the TOK/S line totals session watt-hours and tokens-per-Wh from GPU power, an estimate since it reads the whole card, not just inference.
+
 ## Stack
 
 Go + bubbletea + lipgloss. It's what this genre of tool is built with, the rendering problems are solved, and it cross-compiles to single static binaries for all three platforms in one CI job.

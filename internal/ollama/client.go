@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -18,14 +19,14 @@ func New(base string) *Client {
 	return &Client{base: base, hc: &http.Client{Timeout: 3 * time.Second}}
 }
 
-// Host is the bare host:port of the server, for labelling rows when
-// more than one ollama is being watched.
+// Host is the host:port of the server, for labelling rows when more
+// than one ollama is being watched. url.Parse so a userinfo or path in
+// the base url doesn't leak into the label.
 func (c *Client) Host() string {
-	s := c.base
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
+	if u, err := url.Parse(c.base); err == nil && u.Host != "" {
+		return u.Host
 	}
-	return strings.TrimSuffix(s, "/")
+	return c.base
 }
 
 type Model struct {
