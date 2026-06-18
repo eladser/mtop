@@ -1,13 +1,12 @@
 # winget
 
-Manifest for submitting mtop to the public winget catalog. Unlike brew and
-scoop, winget packages live in Microsoft's
-[winget-pkgs](https://github.com/microsoft/winget-pkgs) repo and go through
-their review, so this can't be self-hosted. To publish a new version:
+The first version was submitted by hand (these manifests, validated with
+`winget validate --manifest packaging/winget`, PR'd into Microsoft's
+[winget-pkgs](https://github.com/microsoft/winget-pkgs)).
 
-1. Bump `PackageVersion` and the installer url/hash in these three files.
-2. Validate: `winget validate --manifest packaging/winget`
-3. Open a PR adding them under `manifests/e/eladser/mtop/<version>/` in
-   winget-pkgs (or use `wingetcreate submit`).
+After that it's automatic: `.github/workflows/release.yml` runs
+winget-releaser on each published GitHub release and opens the bump PR. It
+needs a `WINGET_TOKEN` repo secret, a classic PAT with public_repo scope, so
+it can push to the winget-pkgs fork. Microsoft still merges on their side.
 
-Until that's merged, Windows users install with scoop (see the main README).
+The manifests here are kept as a reference for the format.

@@ -1,0 +1,43 @@
+name: release
+
+# fires when I publish a release (with hand-written notes). builds the
+# binaries, attaches them, and opens the winget bump PR. brew/scoop still
+# get bumped by hand for now.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: build zips
+        run: |
+          ver=${GITHUB_REF_NAME#v}
+          for t in "windows amd64 mtop.exe" "linux amd64 mtop" "linux arm64 mtop" "darwin amd64 mtop" "darwin arm64 mtop"; do
+            set -- $t; os=$1; arch=$2; bin=$3
+            d="dist/${os}_${arch}"; mkdir -p "$d"
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$ver" -o "$d/$bin" .
+            cp LICENSE README.md "$d"
+            (cd "$d" && zip -q "../mtop_${ver}_${os}_${arch}.zip" "$bin" LICENSE README.md)
+          done
+
+      - name: attach to release
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: winget
+        uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: eladser.mtop
+          installers-regex: 'windows_amd64\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}

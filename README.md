@@ -1,5 +1,9 @@
 ![mtop - htop for your local AI](docs/img/banner.png)
 
+[![release](https://img.shields.io/github/v/release/eladser/mtop)](https://github.com/eladser/mtop/releases)
+[![winget](https://img.shields.io/winget/v/eladser.mtop)](https://winstall.app/apps/eladser.mtop)
+[![license](https://img.shields.io/github/license/eladser/mtop)](LICENSE)
+
 ![demo](docs/img/demo.gif)
 
 One terminal window for whatever you're running locally (Ollama, llama.cpp, LM Studio, vLLM). It shows the loaded models and how much VRAM they're sitting on, the GPU, and the requests going through with their tok/s. Hit `c` to flip the middle pane to per-model stats.
