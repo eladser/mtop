@@ -29,6 +29,52 @@ func Run(base, prompt string, models []string) []Result {
 	return out
 }
 
+// RunOpenAI is the same idea against an OpenAI-style endpoint (llama.cpp,
+// LM Studio, vLLM). Those carry no generation timings, so tok/s here is
+// tokens over wall-clock, prompt processing included.
+func RunOpenAI(base, prompt string, models []string) []Result {
+	out := make([]Result, len(models))
+	for i, m := range models {
+		out[i] = oneOpenAI(base, prompt, m)
+	}
+	return out
+}
+
+func oneOpenAI(base, prompt, model string) Result {
+	r := Result{Model: model}
+	body, _ := json.Marshal(map[string]any{
+		"model":    model,
+		"messages": []map[string]string{{"role": "user", "content": prompt}},
+		"stream":   false,
+	})
+	start := time.Now()
+	resp, err := http.Post(base+"/chat/completions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		r.Err = err
+		return r
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		r.Err = fmt.Errorf("%s", resp.Status)
+		return r
+	}
+	var d struct {
+		Usage struct {
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		r.Err = err
+		return r
+	}
+	r.OutTk = d.Usage.CompletionTokens
+	r.Total = time.Since(start)
+	if s := r.Total.Seconds(); s > 0 {
+		r.TokSec = float64(r.OutTk) / s
+	}
+	return r
+}
+
 func one(base, prompt, model string) Result {
 	r := Result{Model: model}
 	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "stream": false})

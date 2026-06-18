@@ -23,16 +23,16 @@ type Row struct {
 }
 
 type Scanner struct {
-	oll      *ollama.Client
+	olls     []*ollama.Client
 	llamacpp string
 	lmstudio string
 	vllm     string
 	hc       *http.Client
 }
 
-func New(oll *ollama.Client, llamacpp, lmstudio, vllm string) *Scanner {
+func New(olls []*ollama.Client, llamacpp, lmstudio, vllm string) *Scanner {
 	return &Scanner{
-		oll:      oll,
+		olls:     olls,
 		llamacpp: llamacpp,
 		lmstudio: lmstudio,
 		vllm:     vllm,
@@ -44,10 +44,20 @@ func New(oll *ollama.Client, llamacpp, lmstudio, vllm string) *Scanner {
 // answered. ollErr is ollama's error specifically, since that's the
 // one worth telling the user about.
 func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
-	models, err := s.oll.Loaded()
-	ollErr = err
-	if err == nil {
-		alive = append(alive, "ollama")
+	multi := len(s.olls) > 1
+	ollAlive := false
+	for _, oll := range s.olls {
+		oll := oll
+		models, err := oll.Loaded()
+		if err != nil {
+			ollErr = err
+			continue
+		}
+		ollAlive = true
+		from := "ollama"
+		if multi {
+			from = "ollama@" + oll.Host()
+		}
 		for _, m := range models {
 			m := m
 			rows = append(rows, Row{
@@ -56,10 +66,14 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 				Quant:   m.Details.QuantizationLevel,
 				VRAM:    m.SizeVRAM,
 				Expires: m.ExpiresAt,
-				From:    "ollama",
-				Unload:  func() error { return s.oll.Unload(m.Name) },
+				From:    from,
+				Unload:  func() error { return oll.Unload(m.Name) },
 			})
 		}
+	}
+	if ollAlive {
+		alive = append(alive, "ollama")
+		ollErr = nil // at least one answered
 	}
 	if r, ok := s.scanLlamacpp(); ok {
 		alive = append(alive, "llama.cpp")
@@ -76,11 +90,15 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 	return rows, alive, ollErr
 }
 
-// OnDisk is how many models ollama has pulled locally. Cosmetic, so
-// errors just mean zero.
+// OnDisk is how many models ollama has pulled locally, summed across
+// hosts. Cosmetic, so errors just mean zero.
 func (s *Scanner) OnDisk() int {
-	n, _ := s.oll.OnDisk()
-	return n
+	total := 0
+	for _, oll := range s.olls {
+		n, _ := oll.OnDisk()
+		total += n
+	}
+	return total
 }
 
 func (s *Scanner) getJSON(url string, v any) error {

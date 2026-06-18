@@ -4,6 +4,23 @@ import "strings"
 
 var sparks = []rune("▁▂▃▄▅▆▇█")
 
+// sparkPct renders 0..100 values on a fixed scale, so 10% reads low and
+// 90% reads high instead of both filling the line.
+func sparkPct(vals []float64) string {
+	var b strings.Builder
+	for _, v := range vals {
+		i := int(v / 100 * float64(len(sparks)-1))
+		if i < 0 {
+			i = 0
+		}
+		if i >= len(sparks) {
+			i = len(sparks) - 1
+		}
+		b.WriteRune(sparks[i])
+	}
+	return b.String()
+}
+
 func sparkline(vals []float64, width int) string {
 	if len(vals) == 0 || width <= 0 {
 		return ""

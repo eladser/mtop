@@ -62,12 +62,12 @@ qwen3:0.6b                    798.1      175      446ms
 smollm2:135m                  795.3       29     10.72s
 ```
 
-tok/s is decode speed; TOTAL is wall-clock and includes the model load on the first call. Point it at another box with `-ollama`.
+tok/s is decode speed; TOTAL is wall-clock and includes the model load on the first call. Point it at another box with `-ollama`, or compare models on an OpenAI-style server with `-openai http://127.0.0.1:8080/v1`.
 
 ## Flags
 
 ```
--ollama       ollama base url             (default http://127.0.0.1:11434)
+-ollama       ollama base url, or a comma list to watch a few boxes at once
 -llamacpp     llama.cpp server url        (default http://127.0.0.1:8080, empty to skip)
 -lmstudio     lm studio url               (default http://127.0.0.1:1234, empty to skip)
 -vllm         vllm url                    (default http://127.0.0.1:8000, empty to skip)
@@ -76,6 +76,8 @@ tok/s is decode speed; TOTAL is wall-clock and includes the model load on the fi
 -idle-unload  unload models idle this long, e.g. 15m (default off)
 -notify       desktop notification when a gpu hits the alert line
 -history      keep recent requests across restarts (~/.mtop/history.jsonl)
+-mem-alert    gpu memory percent for the alert line (default 93)
+-temp-alert   gpu temperature for the alert line (default 87)
 -no-proxy     don't run the proxy
 ```
 
