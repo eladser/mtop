@@ -155,13 +155,25 @@ func promptOf(body []byte) string {
 	return ""
 }
 
-// ponytail: 2 KB is plenty to eyeball a prompt; keeps memory bounded.
+// clip strips terminal control bytes and caps length by rune. The
+// inspector prints captured prompts and completions to the terminal, so
+// a model could otherwise smuggle escape sequences (clipboard writes,
+// title spoofing) through its output. Drop them at capture. Keep \n and
+// \t since the inspector wraps on newlines. 2 KB is plenty to eyeball.
 func clip(s string) string {
 	const max = 2048
-	if len(s) > max {
-		return s[:max] + "…"
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if r == '\n' || r == '\t' || (r >= 0x20 && r != 0x7f && !(r >= 0x80 && r <= 0x9f)) {
+			b.WriteRune(r)
+			if n++; n >= max {
+				b.WriteString("…")
+				break
+			}
+		}
 	}
-	return s
+	return b.String()
 }
 
 func (p *Proxy) Listen(addr string) error {
