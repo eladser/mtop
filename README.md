@@ -49,6 +49,7 @@ The same port answers `/metrics` in prometheus format if you'd rather watch it f
 | `↑`/`↓`, `k`/`j` | move the selection |
 | `u` | unload the selected model |
 | `c` | swap recent requests for per-model stats |
+| `i` | inspector: the last request's prompt, completion, and timing breakdown (needs `-inspect`) |
 | `q` | quit |
 
 ## Comparing models
@@ -78,8 +79,11 @@ tok/s is decode speed; TOTAL is wall-clock and includes the model load on the fi
 -history      keep recent requests across restarts (~/.mtop/history.jsonl)
 -mem-alert    gpu memory percent for the alert line (default 93)
 -temp-alert   gpu temperature for the alert line (default 87)
+-inspect      capture prompt and completion text for the inspector (i)
 -no-proxy     don't run the proxy
 ```
+
+The TOK/S line also tracks session energy: watt-hours used and tokens per watt-hour, from whole-GPU power. It's an estimate (the whole card, not just inference), so read it as a rough efficiency number, not a meter.
 
 Every flag has an `MTOP_*` env var too, and `~/.mtop.conf` can hold them so you're not retyping a homelab box:
 

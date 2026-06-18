@@ -36,6 +36,7 @@ type App struct {
 	notify    func(string)
 	memAlert  int
 	tempAlert int
+	inspect   bool // whether prompt/completion capture is on
 
 	w, h    int
 	sel     int
@@ -48,19 +49,23 @@ type App struct {
 	gpuErr  error
 
 	// when mtop first saw each model loaded, for idle tracking
-	seen     map[string]time.Time
-	gpuHist  map[string]*trace // util/mem history per gpu, for sparklines
-	lastNote string            // last gpu alert we fired a notification for
-	flash    string
-	flashAt  time.Time
-	flashOk  bool
+	seen       map[string]time.Time
+	gpuHist    map[string]*trace // util/mem history per gpu, for sparklines
+	inspecting bool              // showing the request inspector
+	energyWh   float64           // accumulated GPU energy this session
+	lastPow    time.Time         // last energy sample
+	start      time.Time         // session start, for tok/Wh
+	lastNote   string            // last gpu alert we fired a notification for
+	flash      string
+	flashAt    time.Time
+	flashOk    bool
 }
 
 type trace struct{ util, mem []float64 }
 
-func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string), memAlert, tempAlert int) *App {
+func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string), memAlert, tempAlert int, inspect bool) *App {
 	return &App{scan: scan, gpu: g, store: store, listen: listen, version: version,
-		idleAfter: idleAfter, notify: notify, memAlert: memAlert, tempAlert: tempAlert,
+		idleAfter: idleAfter, notify: notify, memAlert: memAlert, tempAlert: tempAlert, inspect: inspect,
 		seen: map[string]time.Time{}, gpuHist: map[string]*trace{}}
 }
 
@@ -81,7 +86,37 @@ type unloaded struct {
 	auto  bool
 }
 
-func (a *App) Init() tea.Cmd { return a.poll }
+func (a *App) Init() tea.Cmd {
+	a.start = time.Now()
+	return a.poll
+}
+
+// addEnergy integrates whole-GPU watts over the poll interval into
+// watt-hours. ponytail: whole-card power, not per-process; it's an
+// estimate and labelled as one.
+func (a *App) addEnergy() {
+	now := time.Now()
+	if !a.lastPow.IsZero() {
+		var w float64
+		for _, g := range a.gpus {
+			w += g.Power
+		}
+		a.energyWh += w * now.Sub(a.lastPow).Hours()
+	}
+	a.lastPow = now
+}
+
+// sessionTokens counts output tokens generated since the app started,
+// so preloaded history doesn't skew tok/Wh.
+func (a *App) sessionTokens() int {
+	n := 0
+	for _, r := range a.store.Recent(256) {
+		if !r.When.Before(a.start) {
+			n += r.OutTk
+		}
+	}
+	return n
+}
 
 func (a *App) poll() tea.Msg {
 	var d data
@@ -140,6 +175,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "c":
 			a.byModel = !a.byModel
+		case "i":
+			a.inspecting = !a.inspecting
 		case "u":
 			if a.sel < len(a.rows) {
 				row := a.rows[a.sel]
@@ -155,6 +192,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.gpus, a.gpuErr = m.gpus, m.gpuErr
 		a.store.SetGPU(samples(a.gpus))
 		a.recordGPU()
+		a.addEnergy()
 		// fire a desktop notification when an alert first shows up, and
 		// again only if the alert text changes
 		if note := a.gpuAlert(); a.notify != nil && note != "" && note != a.lastNote {
@@ -213,9 +251,12 @@ func (a *App) View() string {
 		paneSt.Width(paneW).Render(a.gpuPane()),
 	)
 	var mid string
-	if a.byModel {
+	switch {
+	case a.inspecting:
+		mid = paneSt.Width(a.w - 4).Render(a.inspectorPane())
+	case a.byModel:
 		mid = paneSt.Width(a.w - 4).Render(a.byModelPane())
-	} else {
+	default:
 		mid = paneSt.Width(a.w - 4).Render(a.requestsPane())
 	}
 	spark := paneSt.Width(a.w - 4).Render(a.throughputPane())
@@ -237,7 +278,7 @@ func (a *App) statusLine() string {
 	if a.listen != "" {
 		proxy = "proxy on " + a.listen
 	}
-	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · q quit · %s · v%s",
+	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · i inspect · q quit · %s · v%s",
 		map[bool]string{true: "requests", false: "by model"}[a.byModel], proxy, a.version)
 	if a.flash != "" && time.Since(a.flashAt) < 12*time.Second {
 		st := selSt
@@ -460,8 +501,65 @@ func (a *App) throughputPane() string {
 		}
 	}
 	p50, p95 := a.store.Percentiles()
-	return fmt.Sprintf("%s %s  %.1f %s", title, selSt.Render(sparkline(rates, a.w-44)), rates[len(rates)-1],
-		dimSt.Render(fmt.Sprintf("(peak %.0f · p50 %.0f · p95 %.0f)", peak, p50, p95)))
+	suffix := fmt.Sprintf("(peak %.0f · p50 %.0f · p95 %.0f", peak, p50, p95)
+	if a.energyWh > 0 {
+		suffix += fmt.Sprintf(" · %.1f Wh", a.energyWh)
+		if tok := a.sessionTokens(); tok > 0 {
+			suffix += fmt.Sprintf(" · %.0f tok/Wh", float64(tok)/a.energyWh)
+		}
+	}
+	suffix += ")"
+	w := a.w - len(suffix) - 16
+	if w < 8 {
+		w = 8
+	}
+	return fmt.Sprintf("%s %s  %.1f %s", title, selSt.Render(sparkline(rates, w)), rates[len(rates)-1],
+		dimSt.Render(suffix))
+}
+
+func (a *App) inspectorPane() string {
+	var b strings.Builder
+	b.WriteString(titleSt.Render("INSPECT"))
+	reqs := a.store.Recent(1)
+	switch {
+	case !a.inspect:
+		b.WriteString("\n" + dimSt.Render("start mtop with -inspect to capture prompts and completions"))
+		return b.String()
+	case len(reqs) == 0:
+		b.WriteString("\n" + dimSt.Render("no requests yet"))
+		return b.String()
+	}
+	r := reqs[0]
+	b.WriteString(dimSt.Render("  " + r.When.Format("15:04:05") + " " + r.Model))
+	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("load %s · prompt %s · %d→%d tok · %.1f tok/s",
+		r.Load.Round(time.Millisecond), r.PromptEval.Round(time.Millisecond), r.PromptTk, r.OutTk, r.TokSec)))
+	b.WriteString("\n\n" + titleSt.Render("prompt") + "\n" + wrap(r.Prompt, a.w-6))
+	b.WriteString("\n\n" + titleSt.Render("completion") + "\n" + wrap(r.Completion, a.w-6))
+	return b.String()
+}
+
+// wrap hard-wraps text to width and caps the height so the pane can't
+// blow past the screen. ponytail: dumb wrap, good enough for eyeballing.
+func wrap(s string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+	if s == "" {
+		return dimSt.Render("(empty)")
+	}
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		for len(line) > width {
+			out = append(out, line[:width])
+			line = line[width:]
+		}
+		out = append(out, line)
+		if len(out) >= 12 {
+			out = append(out, dimSt.Render("…"))
+			return strings.Join(out, "\n")
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func gib(n int64) string {
