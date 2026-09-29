@@ -23,13 +23,22 @@ func TestParseGarbage(t *testing.T) {
 
 func TestParseAMD(t *testing.T) {
 	out := []byte(`{"card0":{"Card series":"Radeon RX 7900 XTX","GPU use (%)":"12","Temperature (Sensor edge) (C)":"45.0","Average Graphics Package Power (W)":"63.0","VRAM Total Memory (B)":"25753026560","VRAM Total Used Memory (B)":"1073741824"},"system":{"Driver version":"6.3.2"}}`)
-	all := parseAMD(out)
+	all, err := parseAMD(out)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(all) != 1 {
 		t.Fatalf("expected 1 card, got %d", len(all))
 	}
 	g := all[0]
 	if g.Name != "Radeon RX 7900 XTX" || g.Util != 12 || g.Temp != 45 || g.MemTotal != 24560 || g.MemUsed != 1024 {
 		t.Fatalf("bad parse: %+v", g)
+	}
+}
+
+func TestParseAMDBadJSON(t *testing.T) {
+	if _, err := parseAMD([]byte("not json")); err == nil {
+		t.Fatal("expected an error on bad json")
 	}
 }
 
