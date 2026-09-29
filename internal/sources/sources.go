@@ -5,6 +5,7 @@ package sources
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -107,5 +108,8 @@ func (s *Scanner) getJSON(url string, v any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
 	return json.NewDecoder(resp.Body).Decode(v)
 }

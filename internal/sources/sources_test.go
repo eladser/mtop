@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,6 +52,10 @@ func TestScanMergesSources(t *testing.T) {
 	defer lcpp.Close()
 
 	lms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
 		w.Write([]byte(`{"data":[{"id":"qwen2.5-7b","state":"loaded","quantization":"Q4_K_M"},{"id":"phi-4","state":"not-loaded"}]}`))
 	}))
 	defer lms.Close()
@@ -102,6 +107,140 @@ func TestScanMultiHost(t *testing.T) {
 		if !strings.HasPrefix(r.From, "ollama@") {
 			t.Fatalf("multi-host rows should be labelled by host, got %q", r.From)
 		}
+	}
+}
+
+func TestScanLlamacppRouterMode(t *testing.T) {
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"model_path":"","default_generation_settings":{"n_ctx":0}}`))
+		case "/models":
+			w.Write([]byte(`{"data":[
+				{"id":"a","path":"/models/a.gguf","status":{"value":"loaded"}},
+				{"id":"b","path":"/models/b.gguf","status":{"value":"unloaded"}}
+			]}`))
+		}
+	}))
+	defer lcpp.Close()
+
+	s := New(nil, lcpp.URL, "", "")
+	rows, ok := s.scanLlamacpp()
+	if !ok {
+		t.Fatal("expected router mode to report alive")
+	}
+	if len(rows) != 1 || rows[0].Name != "a.gguf" {
+		t.Fatalf("expected only the loaded model, got %+v", rows)
+	}
+}
+
+func TestScanLlamacppRouterIdle(t *testing.T) {
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"model_path":""}`))
+		case "/models":
+			w.Write([]byte(`{"data":[{"id":"b","path":"/models/b.gguf","status":{"value":"unloaded"}}]}`))
+		}
+	}))
+	defer lcpp.Close()
+
+	rows, ok := New(nil, lcpp.URL, "", "").scanLlamacpp()
+	if !ok || len(rows) != 0 {
+		t.Fatalf("idle router: want alive with no rows, got ok=%v rows=%+v", ok, rows)
+	}
+}
+
+func TestScanLMStudioV1(t *testing.T) {
+	lms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/models" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"models":[
+			{"key":"qwen2.5-7b","quantization":{"name":"Q4_K_M"},"loaded_instances":[{"id":"qwen2.5-7b"}]},
+			{"key":"phi-4","quantization":{"name":"Q4_K_M"},"loaded_instances":[]}
+		]}`))
+	}))
+	defer lms.Close()
+
+	s := New(nil, "", lms.URL, "")
+	rows, ok := s.scanLMStudio()
+	if !ok {
+		t.Fatal("expected lm studio to report alive")
+	}
+	if len(rows) != 1 || rows[0].Name != "qwen2.5-7b" || rows[0].Quant != "Q4_K_M" {
+		t.Fatalf("bad rows: %+v", rows)
+	}
+}
+
+func TestScanLMStudioFallsBackToV0(t *testing.T) {
+	lms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"data":[{"id":"phi-4","state":"loaded","quantization":"Q4_K_M"}]}`))
+	}))
+	defer lms.Close()
+
+	s := New(nil, "", lms.URL, "")
+	rows, ok := s.scanLMStudio()
+	if !ok {
+		t.Fatal("expected lm studio to report alive")
+	}
+	if len(rows) != 1 || rows[0].Name != "phi-4" {
+		t.Fatalf("bad rows: %+v", rows)
+	}
+}
+
+func TestScanVllmMetricFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `vllm:gpu_cache_usage_perc{model_name="m"} 0.5`+"\n"+`vllm:num_requests_running{model_name="m"} 1`+"\n")
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", srv.URL)
+	rows, ok := s.scanVllm()
+	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "cache 50%") {
+		t.Fatalf("expected old metric name to be used as fallback: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanVllmNewMetricName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `vllm:kv_cache_usage_perc{model_name="m"} 0.75`+"\n"+`vllm:num_requests_running{model_name="m"} 2`+"\n")
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", srv.URL)
+	rows, ok := s.scanVllm()
+	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "cache 75%") {
+		t.Fatalf("expected new metric name to be read: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestGetJSONNon2xxIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", "")
+	var v any
+	if err := s.getJSON(srv.URL, &v); err == nil {
+		t.Fatal("expected an error on non-2xx status")
+	}
+}
+
+func TestGetPromLabeledNon2xxIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", "")
+	if _, err := s.getPromLabeled(srv.URL); err == nil {
+		t.Fatal("expected an error on non-2xx status")
 	}
 }
 

@@ -2,6 +2,7 @@ package sources
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -70,6 +71,9 @@ func (s *Scanner) getPromLabeled(url string) (promData, error) {
 		return promData{}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return promData{}, fmt.Errorf("%s: %s", url, resp.Status)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return promData{}, err

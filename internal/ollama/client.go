@@ -1,12 +1,12 @@
 package ollama
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -68,8 +68,14 @@ func (c *Client) OnDisk() (int, error) {
 // for this; a generate call with keep_alive 0 and no prompt is how
 // `ollama stop` does it too.
 func (c *Client) Unload(model string) error {
-	body := fmt.Sprintf(`{"model":%q,"keep_alive":0}`, model)
-	resp, err := c.hc.Post(c.base+"/api/generate", "application/json", strings.NewReader(body))
+	body, err := json.Marshal(struct {
+		Model     string `json:"model"`
+		KeepAlive int    `json:"keep_alive"`
+	}{model, 0})
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Post(c.base+"/api/generate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -93,5 +99,8 @@ func (c *Client) get(path string, v any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("ollama: %s", resp.Status)
+	}
 	return json.NewDecoder(resp.Body).Decode(v)
 }
