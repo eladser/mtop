@@ -15,7 +15,11 @@ func (s *Scanner) scanVllm() ([]Row, bool) {
 	if name == "" {
 		name = "(model)"
 	}
+	cache := m.vals["vllm:kv_cache_usage_perc"]
+	if cache == 0 {
+		cache = m.vals["vllm:gpu_cache_usage_perc"] // pre-0.12
+	}
 	note := fmt.Sprintf("cache %.0f%% · %d running",
-		m.vals["vllm:gpu_cache_usage_perc"]*100, int(m.vals["vllm:num_requests_running"]))
+		cache*100, int(m.vals["vllm:num_requests_running"]))
 	return []Row{{Name: name, From: "vllm", Note: note}}, true
 }

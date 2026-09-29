@@ -35,6 +35,17 @@ func TestLoaded(t *testing.T) {
 	}
 }
 
+func TestLoadedServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).Loaded(); err == nil {
+		t.Fatal("expected an error on non-2xx status")
+	}
+}
+
 func TestUnload(t *testing.T) {
 	var gotPath, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
