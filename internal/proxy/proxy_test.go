@@ -153,6 +153,114 @@ func TestOpenAIStreaming(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamingNoUsageUsesTimings(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"model\":\"llama-3-8b\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		io.WriteString(w, "data: {\"model\":\"llama-3-8b\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"timings\":{\"prompt_n\":9,\"predicted_n\":42,\"predicted_per_second\":55.5}}\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	reqs := store.Recent(1)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 recorded request, got %d", len(reqs))
+	}
+	r := reqs[0]
+	if r.Model != "llama-3-8b" || r.OutTk != 42 || r.PromptTk != 9 || r.TokSec != 55.5 || r.Estimated {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestOpenAIStreamingNoUsageNoTimingsEstimates(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; i < 5; i++ {
+			io.WriteString(w, "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
+		}
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	reqs := store.Recent(1)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 recorded request, got %d", len(reqs))
+	}
+	if r := reqs[0]; r.OutTk != 5 || !r.Estimated {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestResponsesStreaming(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"hi"}`+"\n\n")
+		io.WriteString(w, `data: {"type":"response.completed","response":{"model":"gpt-4.1","usage":{"input_tokens":11,"output_tokens":22}}}`+"\n\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/responses", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	reqs := store.Recent(1)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 recorded request, got %d", len(reqs))
+	}
+	r := reqs[0]
+	if r.Model != "gpt-4.1" || r.OutTk != 22 || r.PromptTk != 11 {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestResponsesNonStreaming(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"resp_1","model":"gpt-4.1","usage":{"input_tokens":3,"output_tokens":7}}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/responses", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	reqs := store.Recent(1)
+	if len(reqs) != 1 || reqs[0].OutTk != 7 || reqs[0].PromptTk != 3 {
+		t.Fatalf("bad record: %+v", reqs)
+	}
+}
+
 func TestByModelAndProm(t *testing.T) {
 	store := NewStore(10)
 	store.Add(Request{Model: "a", TokSec: 10, OutTk: 100})

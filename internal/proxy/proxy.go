@@ -111,6 +111,7 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	path := req.URL.Path
 	ollama := path == "/api/generate" || path == "/api/chat"
 	openai := path == "/v1/chat/completions" || path == "/v1/completions"
+	responses := path == "/v1/responses"
 
 	var prompt string
 	if t.inspect && (ollama || openai) && req.Body != nil {
@@ -124,8 +125,8 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ollama || openai {
-		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai,
+	if ollama || openai || responses {
+		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, responses: responses,
 			started: started, inspect: t.inspect, prompt: prompt}
 	}
 	return resp, nil
@@ -209,16 +210,30 @@ type chunk struct {
 // tap reads through a (possibly streaming) body, recording the final
 // chunk without buffering or delaying anything the client sees.
 type tap struct {
-	rc      io.ReadCloser
-	store   *Store
-	path    string
-	openai  bool
-	started time.Time
-	inspect bool
-	prompt  string
-	comp    strings.Builder
-	buf     bytes.Buffer
-	done    bool
+	rc        io.ReadCloser
+	store     *Store
+	path      string
+	openai    bool
+	responses bool
+	started   time.Time
+	inspect   bool
+	prompt    string
+	comp      strings.Builder
+	buf       bytes.Buffer
+	done      bool
+
+	// openai streaming without a usage block: llama.cpp's own timings on
+	// the last chunk are exact, otherwise tokens are estimated from the
+	// number of content-bearing delta chunks seen.
+	oModel   string
+	oTimings *oaiTimings
+	oDeltas  int
+}
+
+type oaiTimings struct {
+	PromptN            int     `json:"prompt_n"`
+	PredictedN         int     `json:"predicted_n"`
+	PredictedPerSecond float64 `json:"predicted_per_second"`
 }
 
 func (t *tap) Read(b []byte) (int, error) {
@@ -247,8 +262,12 @@ func (t *tap) drain() {
 }
 
 func (t *tap) record(line []byte) {
-	if t.openai {
+	switch {
+	case t.openai:
 		t.recordOpenAI(line)
+		return
+	case t.responses:
+		t.recordResponses(line)
 		return
 	}
 	line = bytes.TrimSpace(line)
@@ -287,13 +306,19 @@ func (t *tap) record(line []byte) {
 	t.store.Add(r)
 }
 
-// OpenAI-style responses (llama.cpp, LM Studio, vLLM all speak this)
-// put counters in a usage block: on the last SSE chunk when streaming,
-// or on the body itself otherwise. No timings though, so tok/s here is
-// wall-clock and includes prompt processing.
+// OpenAI-style responses (llama.cpp, LM Studio, vLLM all speak this) put
+// counters in a usage block: on the last SSE chunk when streaming, or on
+// the body itself otherwise. mtop doesn't inject stream_options to ask
+// for that block on streams that don't already send one, since clients
+// are promised the exact same bytes back, so a plain SSE stream (no
+// usage) falls through to finishOpenAI once it ends.
 func (t *tap) recordOpenAI(line []byte) {
 	line = bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:")))
-	if len(line) == 0 || bytes.Equal(line, []byte("[DONE]")) {
+	if len(line) == 0 {
+		return
+	}
+	if bytes.Equal(line, []byte("[DONE]")) {
+		t.finishOpenAI()
 		return
 	}
 	var c struct {
@@ -302,8 +327,28 @@ func (t *tap) recordOpenAI(line []byte) {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 		} `json:"usage"`
+		Timings *oaiTimings `json:"timings"`
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
 	}
-	if json.Unmarshal(line, &c) != nil || c.Usage == nil || c.Usage.CompletionTokens == 0 {
+	if json.Unmarshal(line, &c) != nil {
+		return
+	}
+	if c.Model != "" {
+		t.oModel = c.Model
+	}
+	if c.Timings != nil {
+		t.oTimings = c.Timings
+	}
+	for _, ch := range c.Choices {
+		if ch.Delta.Content != "" {
+			t.oDeltas++
+		}
+	}
+	if c.Usage == nil || c.Usage.CompletionTokens == 0 {
 		return
 	}
 	t.done = true
@@ -322,9 +367,92 @@ func (t *tap) recordOpenAI(line []byte) {
 	t.store.Add(r)
 }
 
+// finishOpenAI records a streamed request that never got a usage block.
+// llama.cpp's own timings (predicted_n, predicted_per_second) are exact
+// when present; otherwise the delta chunk count stands in for output
+// tokens, which is close enough for most local servers that emit one
+// token per chunk.
+func (t *tap) finishOpenAI() {
+	if t.done {
+		return
+	}
+	t.done = true
+	wall := time.Since(t.started)
+	r := Request{When: time.Now(), Path: t.path, Model: t.oModel, Total: wall}
+	switch {
+	case t.oTimings != nil && t.oTimings.PredictedN > 0:
+		r.PromptTk = t.oTimings.PromptN
+		r.OutTk = t.oTimings.PredictedN
+		r.TokSec = t.oTimings.PredictedPerSecond
+	case t.oDeltas > 0:
+		r.OutTk = t.oDeltas
+		r.Estimated = true
+		if s := wall.Seconds(); s > 0 {
+			r.TokSec = float64(t.oDeltas) / s
+		}
+	default:
+		return
+	}
+	t.store.Add(r)
+}
+
+// /v1/responses (llama.cpp's OpenAI Responses API passthrough) carries
+// usage on the response object: at the top level for a plain body, or
+// nested under "response" on the streamed response.completed event.
+func (t *tap) recordResponses(line []byte) {
+	line = bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:")))
+	if len(line) == 0 || bytes.Equal(line, []byte("[DONE]")) {
+		return
+	}
+	type usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	}
+	var c struct {
+		Model    string `json:"model"`
+		Usage    *usage `json:"usage"`
+		Response *struct {
+			Model string `json:"model"`
+			Usage *usage `json:"usage"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(line, &c) != nil {
+		return
+	}
+	model, u := c.Model, c.Usage
+	if c.Response != nil {
+		if c.Response.Model != "" {
+			model = c.Response.Model
+		}
+		if c.Response.Usage != nil {
+			u = c.Response.Usage
+		}
+	}
+	if u == nil || u.OutputTokens == 0 {
+		return
+	}
+	t.done = true
+	wall := time.Since(t.started)
+	r := Request{
+		When:     time.Now(),
+		Path:     t.path,
+		Model:    model,
+		PromptTk: u.InputTokens,
+		OutTk:    u.OutputTokens,
+		Total:    wall,
+	}
+	if s := wall.Seconds(); s > 0 {
+		r.TokSec = float64(u.OutputTokens) / s
+	}
+	t.store.Add(r)
+}
+
 func (t *tap) Close() error {
 	if !t.done && t.buf.Len() < maxBuf {
 		t.record(t.buf.Bytes())
+	}
+	if t.openai && !t.done {
+		t.finishOpenAI()
 	}
 	return t.rc.Close()
 }
