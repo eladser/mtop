@@ -87,12 +87,23 @@ func parse(out string) []Stats {
 	return all
 }
 
+// nvidia-smi prints "[N/A]" for a field the card/driver doesn't support
+// (e.g. power draw on older cards); -1 marks that as unknown rather than
+// a real zero.
 func atoi(s string) int {
-	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, "N/A") {
+		return -1
+	}
+	n, _ := strconv.Atoi(s)
 	return n
 }
 
 func atof(s string) float64 {
-	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, "N/A") {
+		return -1
+	}
+	v, _ := strconv.ParseFloat(s, 64)
 	return v
 }

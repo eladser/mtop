@@ -99,7 +99,9 @@ func (a *App) addEnergy() {
 	if !a.lastPow.IsZero() {
 		var w float64
 		for _, g := range a.gpus {
-			w += g.Power
+			if g.Power > 0 { // -1 means the card doesn't report power
+				w += g.Power
+			}
 		}
 		a.energyWh += w * now.Sub(a.lastPow).Hours()
 	}
@@ -421,8 +423,8 @@ func (a *App) gpuPane() string {
 				st = warnSt
 			}
 			b.WriteString("\n" + g.Name + "\n" + st.Render(fmt.Sprintf(
-				"util %3d%%  mem %d/%d MiB (%d%%)  %d°C  %.0fW",
-				g.Util, g.MemUsed, g.MemTotal, pct, g.Temp, g.Power)))
+				"util %3s  mem %d/%d MiB (%d%%)  %s  %s",
+				naPct(g.Util), g.MemUsed, g.MemTotal, pct, naTemp(g.Temp), naWatt(g.Power))))
 			if t := a.gpuHist[g.Name]; t != nil && len(t.util) > 1 {
 				b.WriteString("\n" + dimSt.Render("util ") + selSt.Render(sparkPct(t.util)) +
 					dimSt.Render("  mem ") + selSt.Render(sparkPct(t.mem)))
@@ -439,6 +441,29 @@ func (a *App) gpuPane() string {
 		}
 	}
 	return b.String()
+}
+
+// naPct/naTemp/naWatt render the -1 sentinel gpu.Read uses for fields
+// nvidia-smi reports as "[N/A]" instead of showing a false zero.
+func naPct(v int) string {
+	if v < 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d%%", v)
+}
+
+func naTemp(v int) string {
+	if v < 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d°C", v)
+}
+
+func naWatt(v float64) string {
+	if v < 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.0fW", v)
 }
 
 func samples(gs []gpu.Stats) []proxy.GPUSample {

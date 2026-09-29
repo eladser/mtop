@@ -9,18 +9,21 @@ import (
 
 // AMD via rocm-smi's json output. The keys are long prose strings and
 // have moved around between versions, so match loosely.
+// ponytail: amd-smi is rocm-smi's replacement and worth preferring once
+// its --json shape (nested metric/static objects, not this flat kv) is
+// worth the rewrite; punting on that here.
 func readAMD(path string) ([]Stats, error) {
 	out, err := exec.Command(path, "--showproductname", "--showuse", "--showmeminfo", "vram", "--showtemp", "--showpower", "--json").Output()
 	if err != nil {
 		return nil, err
 	}
-	return parseAMD(out), nil
+	return parseAMD(out)
 }
 
-func parseAMD(out []byte) []Stats {
+func parseAMD(out []byte) ([]Stats, error) {
 	var cards map[string]map[string]string
-	if json.Unmarshal(out, &cards) != nil {
-		return nil
+	if err := json.Unmarshal(out, &cards); err != nil {
+		return nil, err
 	}
 	var all []Stats
 	for card, kv := range cards {
@@ -46,7 +49,7 @@ func parseAMD(out []byte) []Stats {
 		}
 		all = append(all, g)
 	}
-	return all
+	return all, nil
 }
 
 func parseBytes(s string) int64 {
