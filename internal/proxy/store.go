@@ -20,6 +20,7 @@ type Request struct {
 	PromptEval time.Duration // prompt processing time (ollama, inspector)
 	Prompt     string        // captured only with -inspect
 	Completion string        // captured only with -inspect
+	Estimated  bool          // OutTk guessed from chunk count, not a real usage block
 }
 
 // GPUSample is the slice of GPU state /metrics re-exports. It's a copy
