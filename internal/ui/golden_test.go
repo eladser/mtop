@@ -72,6 +72,9 @@ func fixedApp() *App {
 }
 
 func TestGoldenView(t *testing.T) {
+	// CI runners have no gpu tool, so force a reader that reports available
+	// without running anything; the pane renders the fixture's stats
+	t.Setenv("MTOP_GPU", "apple")
 	tests := []struct {
 		name   string
 		golden string
