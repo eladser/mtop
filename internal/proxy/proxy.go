@@ -29,6 +29,9 @@ const maxBuf = 1 << 20
 // message without holding a misbehaving server's output in memory
 const maxErrBuf = 64 * 1024
 
+// var, not const, so tests can shrink it without allocating 8 MiB
+var maxPeek int64 = 8 << 20
+
 type Proxy struct {
 	target  *url.URL
 	store   *Store
@@ -119,9 +122,13 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	var prompt, reqModel string
 	if (ollama || openai) && req.Body != nil {
-		body, _ := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
+		// peek at most 8 MiB (base64 images can be big); anything past that
+		// streams through untouched and just doesn't get a model label
+		body, _ := io.ReadAll(io.LimitReader(req.Body, maxPeek))
+		req.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), req.Body), req.Body}
 		reqModel = modelOf(body)
 		if t.inspect {
 			prompt = promptOf(body)

@@ -579,6 +579,56 @@ func TestMetricsIncludesCPUGauge(t *testing.T) {
 	}
 }
 
+func TestPeekCapStillForwardsFullBody(t *testing.T) {
+	old := maxPeek
+	maxPeek = 16
+	defer func() { maxPeek = old }()
+
+	var got []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		io.WriteString(w, `{"model":"m","done":true,"eval_count":1,"eval_duration":1000000000}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	body := `{"model":"m","prompt":"` + strings.Repeat("x", 200) + `"}`
+	resp, err := http.Post(front.URL+"/api/generate", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if string(got) != body {
+		t.Fatalf("upstream should get every byte past the peek cap: got %d bytes, want %d", len(got), len(body))
+	}
+}
+
+func TestSmallBodyStillLabelsRejectedRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"type":"exceed_context_size_error","n_prompt_tokens":5000,"n_ctx":4096}}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if r := store.Recent(1)[0]; r.Model != "m" {
+		t.Fatalf("expected the model label pulled from the request body: %+v", r)
+	}
+}
+
 func TestOtherPathsPassThrough(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"models":[]}`)

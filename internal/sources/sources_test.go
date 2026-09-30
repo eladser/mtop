@@ -74,7 +74,7 @@ func TestScanMergesSources(t *testing.T) {
 	if rows[0].From != "ollama" || rows[0].Unload == nil {
 		t.Fatalf("ollama row should be unloadable: %+v", rows[0])
 	}
-	if rows[1].Name != "llama-3-8b.Q4_K_M.gguf" || rows[1].Note == "" {
+	if rows[1].Name != "llama-3-8b.Q4_K_M.gguf" || rows[1].Note == "" || rows[1].Ctx != 8192 {
 		t.Fatalf("bad llama.cpp row: %+v", rows[1])
 	}
 	if rows[2].From != "lm studio" || rows[2].Unload != nil {
@@ -123,7 +123,7 @@ func TestScanOllamaCPUOffload(t *testing.T) {
 			}))
 			defer oll.Close()
 
-			rows, _, err := New([]*ollama.Client{ollama.New(oll.URL)}, "", "", "").Scan()
+			rows, _, err := New([]*ollama.Client{ollama.New(oll.URL)}, "", "", "", "", "", "").Scan()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -214,7 +214,7 @@ func TestScanLMStudioV1(t *testing.T) {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		w.Write([]byte(`{"models":[
-			{"key":"qwen2.5-7b","quantization":{"name":"Q4_K_M"},"loaded_instances":[{"id":"qwen2.5-7b"}]},
+			{"key":"qwen2.5-7b","quantization":{"name":"Q4_K_M"},"loaded_instances":[{"id":"qwen2.5-7b","config":{"context_length":32768}}]},
 			{"key":"phi-4","quantization":{"name":"Q4_K_M"},"loaded_instances":[]}
 		]}`))
 	}))
@@ -225,7 +225,7 @@ func TestScanLMStudioV1(t *testing.T) {
 	if !ok {
 		t.Fatal("expected lm studio to report alive")
 	}
-	if len(rows) != 1 || rows[0].Name != "qwen2.5-7b" || rows[0].Quant != "Q4_K_M" {
+	if len(rows) != 1 || rows[0].Name != "qwen2.5-7b" || rows[0].Quant != "Q4_K_M" || rows[0].Ctx != 32768 {
 		t.Fatalf("bad rows: %+v", rows)
 	}
 }
@@ -332,6 +332,37 @@ func TestScanLlamaswapFallsBackToLlamacppURL(t *testing.T) {
 	}
 }
 
+func TestScanSkipsLlamacppWhenLlamaswapAnswers(t *testing.T) {
+	// llama-swap defaults to :8080 same as bare llama.cpp and proxies
+	// /props, so a single server here stands in for both when only
+	// -llamacpp is set
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/running":
+			w.Write([]byte(`{"running":[{"model":"qwen3:32b","state":"ready","ttl":300}]}`))
+		case "/props":
+			w.Write([]byte(`{"model_path":"/models/qwen3-32b.gguf","default_generation_settings":{"n_ctx":8192}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s := New(nil, srv.URL, "", "", "", "", "")
+	rows, alive, err := s.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].From != "llama-swap" {
+		t.Fatalf("expected only the llama-swap row, no llama.cpp duplicate: %+v", rows)
+	}
+	for _, a := range alive {
+		if a == "llama.cpp" {
+			t.Fatalf("llama.cpp shouldn't report alive when llama-swap answers the same url: %v", alive)
+		}
+	}
+}
+
 func TestScanLemonade(t *testing.T) {
 	lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"all_models_loaded":[{"model_name":"Qwen3-0.6B-GGUF","device":"gpu","recipe_options":{"ctx_size":8192}}]}`))
@@ -342,6 +373,22 @@ func TestScanLemonade(t *testing.T) {
 	rows, ok := s.scanLemonade()
 	if !ok || len(rows) != 1 || rows[0].Name != "Qwen3-0.6B-GGUF" || !strings.Contains(rows[0].Note, "gpu") || !strings.Contains(rows[0].Note, "8192") {
 		t.Fatalf("bad lemonade row: %+v ok=%v", rows, ok)
+	}
+	if rows[0].Ctx != 8192 || rows[0].CPU != 0 {
+		t.Fatalf("expected ctx from recipe_options and no cpu offload for a gpu model: %+v", rows[0])
+	}
+}
+
+func TestScanLemonadeCPUDevice(t *testing.T) {
+	lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"all_models_loaded":[{"model_name":"Qwen3-0.6B-GGUF","device":"cpu","recipe_options":{"ctx_size":4096}}]}`))
+	}))
+	defer lem.Close()
+
+	s := New(nil, "", "", "", "", lem.URL, "")
+	rows, ok := s.scanLemonade()
+	if !ok || len(rows) != 1 || rows[0].CPU != 100 || rows[0].Ctx != 4096 {
+		t.Fatalf("expected a fully-cpu lemonade model to report CPU=100: %+v ok=%v", rows, ok)
 	}
 }
 
