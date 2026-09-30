@@ -49,7 +49,7 @@ The same port answers `/metrics` in prometheus format if you'd rather watch it f
 | `↑`/`↓`, `k`/`j` | move the selection |
 | `u` | unload the selected model |
 | `c` | swap recent requests for per-model stats |
-| `i` | inspector: the last request's prompt, completion, and timing breakdown (needs `-inspect`) |
+| `i` | inspector: the last request's prompt, thinking (reasoning models), completion, and timing breakdown (needs `-inspect`) |
 | `q` | quit |
 
 ## Comparing models

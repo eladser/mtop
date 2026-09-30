@@ -10,6 +10,8 @@
 - AMD and Intel GPUs on Windows through performance counters: util and memory, no temperature or power.
 - `/metrics` gains `mtop_model_cpu_percent` and `mtop_ctx_overflow_total`.
 - `-notify` also fires when a model loads partly on CPU and when a model's requests run over context (once a minute per model at most).
+- Reasoning models: thinking tokens count toward tok/s estimates (`reasoning_content` and `reasoning` deltas), and the inspector shows the thinking text separately from the answer, for Ollama native, OpenAI-style and `/v1/responses` traffic.
+- The inspector captures the completion for OpenAI-style and `/v1/responses` requests too, not just Ollama native.
 
 ### Changed
 - amd-smi is preferred over rocm-smi when both are installed.
