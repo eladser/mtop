@@ -164,15 +164,19 @@ func modelOf(body []byte) string {
 	return b.Model
 }
 
+type chatMsg struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
 // promptOf digs the user's text out of a request body, ollama or openai
-// shape, for the inspector. Best effort.
+// shape (chat messages, completions prompt, /v1/responses input), for
+// the inspector. Best effort.
 func promptOf(body []byte) string {
 	var b struct {
-		Prompt   string `json:"prompt"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		Prompt   string          `json:"prompt"`
+		Messages []chatMsg       `json:"messages"`
+		Input    json.RawMessage `json:"input"`
 	}
 	if json.Unmarshal(body, &b) != nil {
 		return ""
@@ -180,12 +184,45 @@ func promptOf(body []byte) string {
 	if b.Prompt != "" {
 		return clip(b.Prompt)
 	}
-	for i := len(b.Messages) - 1; i >= 0; i-- {
-		if b.Messages[i].Role == "user" {
-			return clip(b.Messages[i].Content)
+	if s := lastUser(b.Messages); s != "" {
+		return clip(s)
+	}
+	var s string
+	if json.Unmarshal(b.Input, &s) == nil {
+		return clip(s)
+	}
+	var items []chatMsg
+	if json.Unmarshal(b.Input, &items) == nil {
+		return clip(lastUser(items))
+	}
+	return ""
+}
+
+func lastUser(ms []chatMsg) string {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if ms[i].Role == "user" {
+			return textOf(ms[i].Content)
 		}
 	}
 	return ""
+}
+
+// textOf reads a content that is a plain string or an array of parts
+// with text ("text" / "input_text" types).
+func textOf(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	json.Unmarshal(raw, &parts)
+	var sb strings.Builder
+	for _, p := range parts {
+		sb.WriteString(p.Text)
+	}
+	return sb.String()
 }
 
 // clip strips terminal control bytes and caps length by rune. The
@@ -391,7 +428,12 @@ func (t *tap) recordOpenAI(line []byte) {
 		t.oTimings = c.Timings
 	}
 	for _, ch := range c.Choices {
-		think := ch.Delta.ReasoningContent + ch.Delta.Reasoning
+		think := ch.Delta.ReasoningContent
+		if r := ch.Delta.Reasoning; think == "" {
+			think = r
+		} else if r != think {
+			think += r
+		}
 		if ch.Delta.Content != "" || think != "" {
 			t.oDeltas++
 		}

@@ -791,3 +791,38 @@ func TestThinkingNotCapturedWithoutInspect(t *testing.T) {
 		t.Fatalf("thinking captured without -inspect: %q", r.Thinking)
 	}
 }
+
+func TestPromptOfShapes(t *testing.T) {
+	tests := []struct{ name, body, want string }{
+		{"prompt", `{"prompt":"hi"}`, "hi"},
+		{"string content", `{"messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b"},{"role":"user","content":"c"}]}`, "c"},
+		{"parts content", `{"messages":[{"role":"system","content":"s"},{"role":"user","content":[{"type":"text","text":"foo "},{"type":"image_url","image_url":{"url":"x"}},{"type":"text","text":"bar"}]}]}`, "foo bar"},
+		{"responses string", `{"input":"hello"}`, "hello"},
+		{"responses items string", `{"input":[{"role":"user","content":"one"},{"role":"assistant","content":"x"},{"role":"user","content":"two"}]}`, "two"},
+		{"responses parts", `{"input":[{"role":"user","content":[{"type":"input_text","text":"pa"},{"type":"input_text","text":"rt"}]}]}`, "part"},
+		{"none", `{"model":"m"}`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := promptOf([]byte(tc.body)); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIThinkingNotDoubled(t *testing.T) {
+	for _, tc := range []struct{ name, delta, want string }{
+		{"both equal", `"reasoning_content":"hmm","reasoning":"hmm"`, "hmm"},
+		{"only reasoning", `"reasoning":"hmm"`, "hmm"},
+		{"only reasoning_content", `"reasoning_content":"hmm"`, "hmm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tp := &tap{openai: true, inspect: true, store: NewStore(10), started: time.Now()}
+			tp.record([]byte(`data: {"model":"m","choices":[{"delta":{` + tc.delta + `}}]}`))
+			if got := tp.think.String(); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

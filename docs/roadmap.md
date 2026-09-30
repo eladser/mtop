@@ -51,6 +51,7 @@
 - AMD through amd-smi (rocm-smi still works); AMD and Intel on Windows through performance counters
 - Offload and overflow in `/metrics` and `-notify`
 - Bubble Tea v2
+- Reasoning models: thinking counted and shown; inspector capture for OpenAI-style and `/v1/responses` traffic
 
 ## Later / maybe
 

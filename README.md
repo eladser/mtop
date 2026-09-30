@@ -23,6 +23,7 @@ Windows:
 ```
 scoop bucket add eladser https://github.com/eladser/scoop-bucket
 scoop install mtop
+winget install eladser.mtop
 ```
 
 Or grab a binary from [releases](https://github.com/eladser/mtop/releases), or build it with `go install github.com/eladser/mtop@latest`.
@@ -82,7 +83,7 @@ tok/s is decode speed; TOTAL is wall-clock and includes the model load on the fi
 -history      keep recent requests across restarts (~/.mtop/history.jsonl)
 -mem-alert    gpu memory percent for the alert line (default 93)
 -temp-alert   gpu temperature for the alert line (default 87)
--inspect      capture prompt and completion text for the inspector (i)
+-inspect      capture prompt, thinking and completion text (kept in memory, never written to history)
 -no-proxy     don't run the proxy
 ```
 

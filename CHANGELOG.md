@@ -15,6 +15,7 @@
 
 ### Changed
 - amd-smi is preferred over rocm-smi when both are installed.
+- Models pane shows NAME, VRAM and TTL first, so the cpu and overdue markers stay visible in a narrow terminal.
 - Bubble Tea v2 and Lip Gloss v2.
 - The proxy peeks at request bodies (for the model name) up to 8 MiB; anything larger passes through unlabelled.
 
@@ -22,6 +23,8 @@
 - An older Lemonade on :8000 showed up as vLLM.
 - The by-model view reshuffled rows that tied.
 - llama-swap on :8080 also showed up as a second llama.cpp row.
+- Captured prompt and completion text was written to the history file with `-history -inspect` (1.3 and 1.4). It stays in memory now, and old history lines still load.
+- The inspector never captured prompts sent as content-part arrays (`[{"type":"text",...}]`) or as `/v1/responses` `input`.
 
 ## 1.4.0 (2026-09-30)
 
