@@ -59,6 +59,9 @@ func runTop() {
 	llamacpp := flag.String("llamacpp", cfg("MTOP_LLAMACPP", "http://127.0.0.1:8080"), "llama.cpp server url (empty to skip)")
 	lmstudio := flag.String("lmstudio", cfg("MTOP_LMSTUDIO", "http://127.0.0.1:1234"), "lm studio url (empty to skip)")
 	vllm := flag.String("vllm", cfg("MTOP_VLLM", "http://127.0.0.1:8000"), "vllm url (empty to skip)")
+	llamaswap := flag.String("llamaswap", cfg("MTOP_LLAMASWAP", ""), "llama-swap url, if different from -llamacpp (empty rides on -llamacpp)")
+	lemonade := flag.String("lemonade", cfg("MTOP_LEMONADE", "http://127.0.0.1:13305"), "lemonade url (empty to skip)")
+	sglang := flag.String("sglang", cfg("MTOP_SGLANG", "http://127.0.0.1:30000"), "sglang url (empty to skip)")
 	listen := flag.String("listen", cfg("MTOP_LISTEN", "127.0.0.1:4321"), "proxy listen address")
 	target := flag.String("target", cfg("MTOP_TARGET", ""), "proxy upstream (defaults to the ollama url)")
 	noProxy := flag.Bool("no-proxy", false, "don't run the request proxy")
@@ -113,7 +116,7 @@ func runTop() {
 			olls = append(olls, ollama.New(h))
 		}
 	}
-	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm)
+	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm, *llamaswap, *lemonade, *sglang)
 	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert, *inspect)
 	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -8,8 +8,8 @@ func (s *Scanner) scanVllm() ([]Row, bool) {
 		return nil, false
 	}
 	m, err := s.getPromLabeled(s.vllm + "/metrics")
-	if err != nil {
-		return nil, false
+	if err != nil || !m.hasPrefix("vllm:") {
+		return nil, false // old Lemonade on :8000 answers /metrics too, without vllm: keys
 	}
 	name := m.label("model_name")
 	if name == "" {
