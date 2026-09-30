@@ -4,6 +4,7 @@
 package sources
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -24,20 +25,26 @@ type Row struct {
 }
 
 type Scanner struct {
-	olls     []*ollama.Client
-	llamacpp string
-	lmstudio string
-	vllm     string
-	hc       *http.Client
+	olls      []*ollama.Client
+	llamacpp  string
+	lmstudio  string
+	vllm      string
+	llamaswap string
+	lemonade  string
+	sglang    string
+	hc        *http.Client
 }
 
-func New(olls []*ollama.Client, llamacpp, lmstudio, vllm string) *Scanner {
+func New(olls []*ollama.Client, llamacpp, lmstudio, vllm, llamaswap, lemonade, sglang string) *Scanner {
 	return &Scanner{
-		olls:     olls,
-		llamacpp: llamacpp,
-		lmstudio: lmstudio,
-		vllm:     vllm,
-		hc:       &http.Client{Timeout: 800 * time.Millisecond},
+		olls:      olls,
+		llamacpp:  llamacpp,
+		lmstudio:  lmstudio,
+		vllm:      vllm,
+		llamaswap: llamaswap,
+		lemonade:  lemonade,
+		sglang:    sglang,
+		hc:        &http.Client{Timeout: 800 * time.Millisecond},
 	}
 }
 
@@ -88,6 +95,18 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 		alive = append(alive, "vllm")
 		rows = append(rows, r...)
 	}
+	if r, ok := s.scanLlamaswap(); ok {
+		alive = append(alive, "llama-swap")
+		rows = append(rows, r...)
+	}
+	if r, ok := s.scanLemonade(); ok {
+		alive = append(alive, "lemonade")
+		rows = append(rows, r...)
+	}
+	if r, ok := s.scanSglang(); ok {
+		alive = append(alive, "sglang")
+		rows = append(rows, r...)
+	}
 	return rows, alive, ollErr
 }
 
@@ -112,4 +131,20 @@ func (s *Scanner) getJSON(url string, v any) error {
 		return fmt.Errorf("%s: %s", url, resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+func (s *Scanner) postJSON(url string, body any) error {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	resp, err := s.hc.Post(url, "application/json", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	return nil
 }
