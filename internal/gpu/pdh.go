@@ -52,6 +52,11 @@ func aggregatePDH(gfx, mem map[string]float64, adapters []pdhAdapter) []Stats {
 
 	all := make([]Stats, 0, len(rows))
 	for i, r := range rows {
+		// a luid with no registry adapter and nothing allocated is a
+		// software/virtual adapter (basic render, remote display), not a GPU
+		if i >= len(adapters) && r.mb == 0 {
+			continue
+		}
 		g := Stats{
 			Name:    "GPU",
 			Util:    capUtil(util[r.luid]),

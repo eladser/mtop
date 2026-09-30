@@ -65,3 +65,15 @@ func TestLuidOf(t *testing.T) {
 		t.Fatalf("expected passthrough, got %q", got)
 	}
 }
+
+func TestAggregatePDHDropsIdleVirtualAdapter(t *testing.T) {
+	adapters := []pdhAdapter{{Name: "NVIDIA GeForce RTX 5090", TotalMiB: 32607}}
+	mem := map[string]float64{
+		`luid_0x0_0x1_phys_0`: 5423 * (1 << 20),
+		`luid_0x0_0x9_phys_0`: 0,
+	}
+	got := aggregatePDH(nil, mem, adapters)
+	if len(got) != 1 || got[0].Name != "NVIDIA GeForce RTX 5090" {
+		t.Fatalf("want only the real adapter, got %+v", got)
+	}
+}
