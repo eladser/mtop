@@ -30,11 +30,12 @@ func (c *Client) Host() string {
 }
 
 type Model struct {
-	Name      string    `json:"name"`
-	Size      int64     `json:"size"`
-	SizeVRAM  int64     `json:"size_vram"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Details   Details   `json:"details"`
+	Name          string    `json:"name"`
+	Size          int64     `json:"size"`
+	SizeVRAM      int64     `json:"size_vram"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	Details       Details   `json:"details"`
+	ContextLength int       `json:"context_length"` // undocumented, but /api/ps sends it
 }
 
 type Details struct {

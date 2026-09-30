@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const psFixture = `{"models":[{"name":"llama3:8b","size":6654289920,"size_vram":6654289920,"expires_at":"2026-06-09T19:00:00.000000000+03:00","details":{"parameter_size":"8.0B","quantization_level":"Q4_0"}}]}`
+const psFixture = `{"models":[{"name":"llama3:8b","size":6654289920,"size_vram":6654289920,"context_length":8192,"expires_at":"2026-06-09T19:00:00.000000000+03:00","details":{"parameter_size":"8.0B","quantization_level":"Q4_0"}}]}`
 
 func TestLoaded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +32,9 @@ func TestLoaded(t *testing.T) {
 	}
 	if models[0].SizeVRAM != 6654289920 {
 		t.Fatalf("bad vram: %d", models[0].SizeVRAM)
+	}
+	if models[0].ContextLength != 8192 {
+		t.Fatalf("bad context length: %d", models[0].ContextLength)
 	}
 }
 
