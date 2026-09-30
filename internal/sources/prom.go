@@ -18,6 +18,15 @@ type promData struct {
 
 func (p promData) label(key string) string { return p.labels[key] }
 
+func (p promData) hasPrefix(prefix string) bool {
+	for k := range p.vals {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseProm(body string) promData {
 	p := promData{vals: map[string]float64{}, labels: map[string]string{}}
 	sc := bufio.NewScanner(strings.NewReader(body))
