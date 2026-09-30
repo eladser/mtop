@@ -1,6 +1,6 @@
 # vhs docs/demo.tape
 #
-# needs ollama with qwen3:0.6b loaded partly on cpu (num_gpu 18) and
+# needs ollama with qwen3:0.6b loaded partly on cpu (num_gpu 4) and
 # smollm2:135m at num_ctx 512, plus some traffic through 127.0.0.1:4321
 # while it records. Change the paths below to your checkout.
 #
@@ -15,9 +15,9 @@ Output docs/img/demo.gif
 
 Set Shell "powershell"
 Set FontFamily "Cascadia Mono"
-Set FontSize 13
-Set Width 1200
-Set Height 400
+Set FontSize 18
+Set Width 1165
+Set Height 470
 Set Padding 12
 Set Framerate 10
 Set TypingSpeed 0
