@@ -228,8 +228,10 @@ type chunk struct {
 	Model    string `json:"model"`
 	Done     bool   `json:"done"`
 	Response string `json:"response"` // /api/generate
+	Thinking string `json:"thinking"` // /api/generate, reasoning models
 	Message  struct {
-		Content string `json:"content"`
+		Content  string `json:"content"`
+		Thinking string `json:"thinking"` // /api/chat, reasoning models
 	} `json:"message"` // /api/chat
 	PromptEvalCount    int   `json:"prompt_eval_count"`
 	EvalCount          int   `json:"eval_count"`
@@ -251,6 +253,7 @@ type tap struct {
 	inspect   bool
 	prompt    string
 	comp      strings.Builder
+	think     strings.Builder // reasoning-model "thinking" text, -inspect only
 	buf       bytes.Buffer
 	done      bool
 
@@ -315,6 +318,10 @@ func (t *tap) record(line []byte) {
 		t.comp.WriteString(c.Response)
 		t.comp.WriteString(c.Message.Content)
 	}
+	if t.inspect && t.think.Len() < 2048 {
+		t.think.WriteString(c.Thinking)
+		t.think.WriteString(c.Message.Thinking)
+	}
 	if !c.Done {
 		return
 	}
@@ -336,6 +343,7 @@ func (t *tap) record(line []byte) {
 	if t.inspect {
 		r.Prompt = t.prompt
 		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
 	}
 	t.store.Add(r)
 }
@@ -365,6 +373,11 @@ func (t *tap) recordOpenAI(line []byte) {
 		Choices []struct {
 			Delta struct {
 				Content string `json:"content"`
+				// reasoning-model thinking text: llama.cpp and SGLang use
+				// reasoning_content (deepseek-style), Ollama's openai-compat
+				// layer and newer vLLM use reasoning
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"delta"`
 		} `json:"choices"`
 	}
@@ -378,8 +391,15 @@ func (t *tap) recordOpenAI(line []byte) {
 		t.oTimings = c.Timings
 	}
 	for _, ch := range c.Choices {
-		if ch.Delta.Content != "" {
+		think := ch.Delta.ReasoningContent + ch.Delta.Reasoning
+		if ch.Delta.Content != "" || think != "" {
 			t.oDeltas++
+		}
+		if t.inspect && t.comp.Len() < 2048 {
+			t.comp.WriteString(ch.Delta.Content)
+		}
+		if t.inspect && t.think.Len() < 2048 {
+			t.think.WriteString(think)
 		}
 	}
 	if c.Usage == nil || c.Usage.CompletionTokens == 0 {
@@ -398,6 +418,11 @@ func (t *tap) recordOpenAI(line []byte) {
 	}
 	if s := wall.Seconds(); s > 0 {
 		r.TokSec = float64(c.Usage.CompletionTokens) / s
+	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
 	}
 	t.store.Add(r)
 }
@@ -430,6 +455,11 @@ func (t *tap) finishOpenAI() {
 	default:
 		return
 	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
+	}
 	t.store.Add(r)
 }
 
@@ -441,28 +471,50 @@ func (t *tap) recordResponses(line []byte) {
 	if len(line) == 0 || bytes.Equal(line, []byte("[DONE]")) {
 		return
 	}
+	if t.inspect {
+		t.captureResponsesDelta(line)
+	}
 	type usage struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	}
+	// output items: "message" carries the answer in content[].text,
+	// "reasoning" carries the thinking in summary[].text (what most keys
+	// get back) and/or content[].text (the raw trace, org-gated)
+	type outItem struct {
+		Type    string `json:"type"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Summary []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"summary"`
+	}
 	var c struct {
-		Model    string `json:"model"`
-		Usage    *usage `json:"usage"`
+		Model    string    `json:"model"`
+		Usage    *usage    `json:"usage"`
+		Output   []outItem `json:"output"`
 		Response *struct {
-			Model string `json:"model"`
-			Usage *usage `json:"usage"`
+			Model  string    `json:"model"`
+			Usage  *usage    `json:"usage"`
+			Output []outItem `json:"output"`
 		} `json:"response"`
 	}
 	if json.Unmarshal(line, &c) != nil {
 		return
 	}
-	model, u := c.Model, c.Usage
+	model, u, out := c.Model, c.Usage, c.Output
 	if c.Response != nil {
 		if c.Response.Model != "" {
 			model = c.Response.Model
 		}
 		if c.Response.Usage != nil {
 			u = c.Response.Usage
+		}
+		if c.Response.Output != nil {
+			out = c.Response.Output
 		}
 	}
 	if u == nil || u.OutputTokens == 0 {
@@ -482,7 +534,56 @@ func (t *tap) recordResponses(line []byte) {
 	if s := wall.Seconds(); s > 0 {
 		r.TokSec = float64(u.OutputTokens) / s
 	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		// a plain SSE stream already filled comp/think chunk by chunk via
+		// captureResponsesDelta; a non-streaming body only has the answer
+		// here, in the final output array
+		if t.comp.Len() == 0 && t.think.Len() == 0 {
+			for _, item := range out {
+				switch item.Type {
+				case "message":
+					for _, ct := range item.Content {
+						t.comp.WriteString(ct.Text)
+					}
+				case "reasoning":
+					for _, sm := range item.Summary {
+						t.think.WriteString(sm.Text)
+					}
+					for _, ct := range item.Content {
+						t.think.WriteString(ct.Text)
+					}
+				}
+			}
+		}
+		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
+	}
 	t.store.Add(r)
+}
+
+// captureResponsesDelta accumulates a streamed answer/thinking event as it
+// goes by; response.output_text.delta is the answer, response.reasoning_text
+// and response.reasoning_summary_text deltas are the thinking (the raw trace
+// is org-gated, so most keys only ever see the summary one).
+func (t *tap) captureResponsesDelta(line []byte) {
+	var d struct {
+		Type  string `json:"type"`
+		Delta string `json:"delta"`
+	}
+	if json.Unmarshal(line, &d) != nil {
+		return
+	}
+	switch d.Type {
+	case "response.output_text.delta":
+		if t.comp.Len() < 2048 {
+			t.comp.WriteString(d.Delta)
+		}
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		if t.think.Len() < 2048 {
+			t.think.WriteString(d.Delta)
+		}
+	}
 }
 
 func (t *tap) Close() error {

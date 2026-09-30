@@ -60,6 +60,30 @@ func TestInspectCaptures(t *testing.T) {
 	}
 }
 
+func TestInspectCapturesThinkingOllamaChat(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"qwen3:4b","done":false,"message":{"role":"assistant","thinking":"let me "}}`+"\n")
+		io.WriteString(w, `{"model":"qwen3:4b","done":false,"message":{"role":"assistant","thinking":"think"}}`+"\n")
+		io.WriteString(w, `{"model":"qwen3:4b","done":false,"message":{"role":"assistant","content":"42"}}`+"\n")
+		io.WriteString(w, `{"model":"qwen3:4b","done":true,"eval_count":10,"eval_duration":1000000000}`+"\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyForInspect(t, upstream.URL, store, true)
+	resp, err := http.Post(front.URL+"/api/chat", "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"what's 6*7"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	r := store.Recent(1)[0]
+	if r.Thinking != "let me think" || r.Completion != "42" {
+		t.Fatalf("bad capture: thinking=%q completion=%q", r.Thinking, r.Completion)
+	}
+}
+
 func TestStreamingChunks(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -647,5 +671,123 @@ func TestOtherPathsPassThrough(t *testing.T) {
 
 	if got := store.Recent(1); len(got) != 0 {
 		t.Fatalf("tags should not be recorded: %+v", got)
+	}
+}
+
+func post(t *testing.T, url, body string) string {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
+
+func TestInspectCapturesThinkingOllamaGenerate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"gpt-oss:20b","done":false,"thinking":"hm "}`+"\n")
+		io.WriteString(w, `{"model":"gpt-oss:20b","done":false,"thinking":"ok"}`+"\n")
+		io.WriteString(w, `{"model":"gpt-oss:20b","done":false,"response":"hi"}`+"\n")
+		io.WriteString(w, `{"model":"gpt-oss:20b","done":true,"eval_count":3,"eval_duration":1000000000}`+"\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyForInspect(t, upstream.URL, store, true)
+	body := post(t, front.URL+"/api/generate", `{"prompt":"hey"}`)
+	if !strings.Contains(body, `"thinking":"hm "`) {
+		t.Fatalf("stream should pass through untouched: %s", body)
+	}
+	r := store.Recent(1)[0]
+	if r.Thinking != "hm ok" || r.Completion != "hi" || r.OutTk != 3 {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestOpenAIReasoningFieldVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string // llama.cpp/sglang/old vllm vs ollama/new vllm
+	}{
+		{"reasoning_content", "reasoning_content"},
+		{"reasoning", "reasoning"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := "data: {\"model\":\"r1\",\"choices\":[{\"delta\":{\"" + tt.field + "\":\"a\"}}]}\n\n" +
+				"data: {\"model\":\"r1\",\"choices\":[{\"delta\":{\"" + tt.field + "\":\"b\"}}]}\n\n" +
+				"data: {\"model\":\"r1\",\"choices\":[{\"delta\":{\"content\":\"42\"}}]}\n\n" +
+				"data: [DONE]\n\n"
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, stream)
+			}))
+			defer upstream.Close()
+
+			store := NewStore(10)
+			front := proxyForInspect(t, upstream.URL, store, true)
+			if got := post(t, front.URL+"/v1/chat/completions", `{}`); got != stream {
+				t.Fatalf("bytes changed: %q", got)
+			}
+			r := store.Recent(1)[0]
+			if r.OutTk != 3 || !r.Estimated {
+				t.Fatalf("reasoning chunks should count: %+v", r)
+			}
+			if r.Thinking != "ab" || r.Completion != "42" {
+				t.Fatalf("bad capture: thinking=%q completion=%q", r.Thinking, r.Completion)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamingThinking(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"type":"response.reasoning_text.delta","delta":"think "}`+"\n\n")
+		io.WriteString(w, `data: {"type":"response.reasoning_summary_text.delta","delta":"more"}`+"\n\n")
+		io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"hi"}`+"\n\n")
+		io.WriteString(w, `data: {"type":"response.completed","response":{"model":"gpt-oss","usage":{"input_tokens":4,"output_tokens":9}}}`+"\n\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyForInspect(t, upstream.URL, store, true)
+	post(t, front.URL+"/v1/responses", `{"input":"yo"}`)
+	r := store.Recent(1)[0]
+	if r.Thinking != "think more" || r.Completion != "hi" || r.OutTk != 9 {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestResponsesNonStreamingThinking(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"gpt-oss","usage":{"input_tokens":3,"output_tokens":7},"output":[`+
+			`{"type":"reasoning","summary":[{"type":"summary_text","text":"sum"}],"content":[{"type":"reasoning_text","text":"raw"}]},`+
+			`{"type":"message","content":[{"type":"output_text","text":"answer"}]}]}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyForInspect(t, upstream.URL, store, true)
+	post(t, front.URL+"/v1/responses", `{}`)
+	r := store.Recent(1)[0]
+	if r.Thinking != "sumraw" || r.Completion != "answer" {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestThinkingNotCapturedWithoutInspect(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"m","done":true,"message":{"thinking":"x"},"eval_count":1,"eval_duration":1000000000}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+	post(t, front.URL+"/api/chat", `{}`)
+	if r := store.Recent(1)[0]; r.Thinking != "" {
+		t.Fatalf("thinking captured without -inspect: %q", r.Thinking)
 	}
 }

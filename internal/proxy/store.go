@@ -20,6 +20,7 @@ type Request struct {
 	PromptEval time.Duration // prompt processing time (ollama, inspector)
 	Prompt     string        // captured only with -inspect
 	Completion string        // captured only with -inspect
+	Thinking   string        // reasoning-model "thinking" text, captured only with -inspect
 	Estimated  bool          // OutTk guessed from chunk count, not a real usage block
 	Ctx        int           // model's context length, 0 if unknown
 	Overflow   bool          // server rejected the request as over context

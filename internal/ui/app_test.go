@@ -87,3 +87,19 @@ func TestCtxMarker(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectorShowsThinking(t *testing.T) {
+	store := proxy.NewStore(5)
+	store.Add(proxy.Request{When: time.Now(), Model: "m", Prompt: "q", Thinking: "pondering", Completion: "answer"})
+	a := &App{store: store, inspect: true, w: 80}
+	out := a.inspectorPane()
+	for _, w := range []string{"thinking", "pondering", "completion", "answer"} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("missing %q in:\n%s", w, out)
+		}
+	}
+	store.Add(proxy.Request{When: time.Now(), Model: "m", Prompt: "q", Completion: "answer"})
+	if strings.Contains(a.inspectorPane(), "thinking") {
+		t.Fatal("thinking block should be hidden when empty")
+	}
+}

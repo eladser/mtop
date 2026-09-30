@@ -653,6 +653,9 @@ func (a *App) inspectorPane() string {
 		b.WriteString("\n" + warnSt.Render("context over, older messages likely dropped"))
 	}
 	b.WriteString("\n\n" + titleSt.Render("prompt") + "\n" + wrap(r.Prompt, a.w-6))
+	if r.Thinking != "" {
+		b.WriteString("\n\n" + titleSt.Render("thinking") + "\n" + dimSt.Render(wrap(r.Thinking, a.w-6)))
+	}
 	b.WriteString("\n\n" + titleSt.Render("completion") + "\n" + wrap(r.Completion, a.w-6))
 	return b.String()
 }
