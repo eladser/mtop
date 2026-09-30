@@ -224,7 +224,13 @@ func byModel(reqs []Request) []ModelStat {
 			OutTk:  out[model],
 		})
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].Count > all[j].Count })
+	sort.Slice(all, func(i, j int) bool {
+		// tie-break on name, or equal counts swap places between redraws
+		if all[i].Count != all[j].Count {
+			return all[i].Count > all[j].Count
+		}
+		return all[i].Model < all[j].Model
+	})
 	return all
 }
 
