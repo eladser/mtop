@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eladser/mtop/internal/compare"
 	"github.com/eladser/mtop/internal/gpu"
@@ -118,7 +118,7 @@ func runTop() {
 	}
 	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm, *llamaswap, *lemonade, *sglang)
 	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert, *inspect)
-	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(app).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

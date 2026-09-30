@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/eladser/mtop/internal/gpu"
 	"github.com/eladser/mtop/internal/proxy"
@@ -25,6 +25,12 @@ var (
 	selSt   = lipgloss.NewStyle().Foreground(accent)
 	paneSt  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(dim).Padding(0, 1)
 )
+
+// paneBorder is the border's horizontal size on paneSt. lipgloss v2's
+// Style.Width sets the outer (border-box) width, while v1 set the
+// interior (padding+content) width and added the border on top, so
+// callers have to add this back in to get the same interior width.
+var paneBorder = paneSt.GetHorizontalBorderSize()
 
 type App struct {
 	scan      *sources.Scanner
@@ -167,7 +173,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = m.Width, m.Height
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch m.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
@@ -252,26 +258,28 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) View() string {
+func (a *App) View() tea.View {
 	if a.w == 0 {
-		return "starting..."
+		return tea.NewView("starting...")
 	}
 	paneW := (a.w - 6) / 2
 	top := lipgloss.JoinHorizontal(lipgloss.Top,
-		paneSt.Width(paneW).Render(a.modelsPane(paneW)),
-		paneSt.Width(paneW).Render(a.gpuPane()),
+		paneSt.Width(paneW+paneBorder).Render(a.modelsPane(paneW)),
+		paneSt.Width(paneW+paneBorder).Render(a.gpuPane()),
 	)
 	var mid string
 	switch {
 	case a.inspecting:
-		mid = paneSt.Width(a.w - 4).Render(a.inspectorPane())
+		mid = paneSt.Width(a.w - 4 + paneBorder).Render(a.inspectorPane())
 	case a.byModel:
-		mid = paneSt.Width(a.w - 4).Render(a.byModelPane())
+		mid = paneSt.Width(a.w - 4 + paneBorder).Render(a.byModelPane())
 	default:
-		mid = paneSt.Width(a.w - 4).Render(a.requestsPane())
+		mid = paneSt.Width(a.w - 4 + paneBorder).Render(a.requestsPane())
 	}
-	spark := paneSt.Width(a.w - 4).Render(a.throughputPane())
-	return lipgloss.JoinVertical(lipgloss.Left, top, mid, spark, a.statusLine())
+	spark := paneSt.Width(a.w - 4 + paneBorder).Render(a.throughputPane())
+	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, top, mid, spark, a.statusLine()))
+	v.AltScreen = true
+	return v
 }
 
 // how many request rows fit without pushing the status line off screen

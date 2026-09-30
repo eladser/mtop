@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -13,6 +14,15 @@ import (
 )
 
 var update = flag.Bool("update", false, "update golden files")
+
+// lipgloss v2 styles always carry their SGR codes in View().Content and
+// leave downsampling/stripping to whatever writes the frame to the real
+// terminal (bubbletea's Program, via colorprofile), unlike v1 which
+// baked a terminal-detected profile in at Render time. Strip them here
+// so the golden files stay plain text, same as the pre-v2 capture.
+var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 // fixedApp builds a deterministic App: a few models across two sources
 // (one fully offloaded, one partial-offload, one CPU-only), one GPU with
@@ -76,7 +86,7 @@ func TestGoldenView(t *testing.T) {
 			if tt.tweak != nil {
 				tt.tweak(a)
 			}
-			got := a.View()
+			got := stripANSI(a.View().Content)
 			if *update {
 				if err := os.MkdirAll(filepath.Dir(tt.golden), 0o755); err != nil {
 					t.Fatal(err)
