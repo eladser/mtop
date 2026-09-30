@@ -362,9 +362,11 @@ func (a *App) modelsPane(w int) string {
 	case len(a.rows) == 0:
 		b.WriteString("\n" + dimSt.Render("nothing loaded, run a model and it shows up here"))
 	default:
-		head := fmt.Sprintf("%-22s %8s %6s %6s  %s", "NAME", "SIZE", "QUANT", "VRAM", "TTL")
+		// name, vram and ttl first: in a half-width pane on a 100-column
+		// terminal the tail gets cut, and the cpu/overdue warnings live in ttl
+		head := fmt.Sprintf("%-20s %6s  %-18s %8s %6s", "NAME", "VRAM", "TTL", "SIZE", "QUANT")
 		if multi {
-			head = fmt.Sprintf("%-22s %-9s %6s %6s  %s", "NAME", "FROM", "QUANT", "VRAM", "TTL")
+			head = fmt.Sprintf("%-20s %6s  %-18s %-9s %6s", "NAME", "VRAM", "TTL", "FROM", "QUANT")
 		}
 		b.WriteString("\n" + dimSt.Render("  "+trunc(head, lineW)))
 		for i, r := range a.rows {
@@ -392,10 +394,11 @@ func (a *App) modelLine(r sources.Row, multi bool) string {
 	case r.CPU == 100:
 		vram = "cpu"
 	}
+	ttl := trunc(ttlFor(r), 18)
 	if multi {
-		return fmt.Sprintf("%-22s %-9s %6s %6s  %s", trunc(r.Name, 22), r.From, r.Quant, vram, ttlFor(r))
+		return fmt.Sprintf("%-20s %6s  %-18s %-9s %6s", trunc(r.Name, 20), vram, ttl, r.From, r.Quant)
 	}
-	return fmt.Sprintf("%-22s %8s %6s %6s  %s", trunc(r.Name, 22), r.Size, r.Quant, vram, ttlFor(r))
+	return fmt.Sprintf("%-20s %6s  %-18s %8s %6s", trunc(r.Name, 20), vram, ttl, r.Size, r.Quant)
 }
 
 func ttlFor(r sources.Row) string {
