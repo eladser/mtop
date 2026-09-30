@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.0 (2026-10-XX)
+## 1.5.0 (2026-09-30)
 
 ### Added
 - Partial-offload warning: an Ollama model split between GPU and system RAM gets a warn-colored row and `cpu 38%` next to its ttl. A model fully on CPU shows `cpu` in the VRAM column.
