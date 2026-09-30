@@ -2,7 +2,7 @@
 
 ## What it is
 
-A live terminal dashboard for the local-AI stack. You run models with Ollama, llama.cpp, LM Studio or vLLM; mtop shows what's actually happening: loaded models, VRAM, tok/s, request log, GPU state. The thing people otherwise approximate with `nvtop` + server logs + guesswork.
+A live terminal dashboard for the local-AI stack. You run models with Ollama, llama.cpp, LM Studio, vLLM, llama-swap, Lemonade or SGLang; mtop shows what's actually happening: loaded models, VRAM, tok/s, request log, GPU state. The thing people otherwise approximate with `nvtop` + server logs + guesswork.
 
 Tagline: "htop for your local AI."
 
@@ -35,7 +35,7 @@ Keyboard-driven, htop conventions, dark, no mouse.
 | llama.cpp | model from `/props`; kv-cache + in-flight from `/metrics` | `/metrics` and `/slots` need `--metrics` / `--slots` on launch |
 | LM Studio | loaded models | `GET /api/v0/models`, rows with `state: "loaded"` |
 | vLLM | model + cache use + running count | `/metrics`, prometheus text, model name from the label |
-| GPU | util, mem, temp, power | `nvidia-smi` / `rocm-smi` query output, no cgo. Apple Silicon: unified-memory from `sysctl` + `vm_stat`, plus gpu utilization from `powermetrics` when mtop runs as root |
+| GPU | util, mem, temp, power | `nvidia-smi` / `amd-smi` / `rocm-smi` query output, no cgo. Windows AMD and Intel: PDH performance counters (util and memory only). Apple Silicon: unified-memory from `sysctl` + `vm_stat`, plus gpu utilization from `powermetrics` when mtop runs as root |
 
 The proxy is the only piece that needs anything from the user: one env var (`OLLAMA_HOST=127.0.0.1:4321`, or `/v1` as an OpenAI base url). Bytes pass through untouched; the tap reads each line looking for the final chunk (ollama) or the usage block (openai-style). It stops buffering at 1 MiB if it hasn't found one, so a giant response still reaches the client whole, it just doesn't get counted. Ollama's tok/s comes from its own timings. Openai-style has none, so it's tokens over wall time, stamped before the round trip so prompt processing is in there. Without the proxy the models and GPU panes still work, and the requests pane says how to fix itself.
 
@@ -57,7 +57,7 @@ Go + bubbletea + lipgloss. It's what this genre of tool is built with, the rende
 
 ## Unloading models
 
-Ollama is supposed to evict idle models and sometimes doesn't. A model can sit past its expiry holding VRAM until someone runs `ollama stop`. mtop marks those rows overdue. `u` unloads the selected model with a generate call carrying `keep_alive: 0`, which is all `ollama stop` does anyway. `-idle-unload 15m` does the same automatically, off the last traffic seen through the proxy. Other servers don't expose an unload, so `u` on their rows just says so.
+Ollama is supposed to evict idle models and sometimes doesn't. A model can sit past its expiry holding VRAM until someone runs `ollama stop`. mtop marks those rows overdue. `u` unloads the selected model with a generate call carrying `keep_alive: 0`, which is all `ollama stop` does anyway. `-idle-unload 15m` does the same automatically, off the last traffic seen through the proxy. llama-swap and Lemonade have their own unload endpoints. The rest don't expose one, so `u` on their rows just says so.
 
 ## Non-goals
 
@@ -68,4 +68,4 @@ Ollama is supposed to evict idle models and sometimes doesn't. A model can sit p
 
 ## Known risks
 
-Ollama could ship a built-in `ollama top` someday. If it does, mtop still has the part ollama won't build: one view across four servers plus the GPU. The proxy needs a one-line config change and some people won't bother, which is fine, half the tool works without it. And tok/s for openai-style requests folds in prompt processing because it's wall-clock, which the FAQ says out loud instead of hiding.
+Ollama could ship a built-in `ollama top` someday. If it does, mtop still has the part ollama won't build: one view across every local server plus the GPU. The proxy needs a one-line config change and some people won't bother, which is fine, half the tool works without it. And tok/s for openai-style requests folds in prompt processing because it's wall-clock, which the FAQ says out loud instead of hiding.
