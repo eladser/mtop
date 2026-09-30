@@ -17,6 +17,8 @@ type Row struct {
 	Size    string
 	Quant   string
 	VRAM    int64
+	CPU     int // percent of the model sitting in system RAM instead of VRAM, 0 if unknown
+	Ctx     int // context length, 0 if unknown
 	Expires time.Time
 	From    string
 	Note    string       // extra per-server detail, e.g. kv-cache use
@@ -61,11 +63,17 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 		}
 		for _, m := range models {
 			m := m
+			cpu := 0
+			if m.Size > 0 {
+				cpu = int((m.Size - m.SizeVRAM) * 100 / m.Size)
+			}
 			rows = append(rows, Row{
 				Name:    m.Name,
 				Size:    m.Details.ParameterSize,
 				Quant:   m.Details.QuantizationLevel,
 				VRAM:    m.SizeVRAM,
+				CPU:     cpu,
+				Ctx:     m.ContextLength,
 				Expires: m.ExpiresAt,
 				From:    from,
 				Unload:  func() error { return oll.Unload(m.Name) },

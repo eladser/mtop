@@ -377,6 +377,208 @@ func TestLastSeen(t *testing.T) {
 	}
 }
 
+func TestOllamaHeuristicCtxOverflow(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"qwen3:32b","done":true,"prompt_eval_count":3980,"eval_count":10,"eval_duration":1000000000}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	store.SetModels([]ModelInfo{{Name: "qwen3:32b", Ctx: 4096}})
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/api/generate", "application/json", strings.NewReader(`{"model":"qwen3:32b"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	r := store.Recent(1)[0]
+	if r.Ctx != 4096 || r.PromptTk != 3980 {
+		t.Fatalf("bad record: %+v", r)
+	}
+	if pct := r.CtxPercent(); pct != 97 {
+		t.Fatalf("want 97%%, got %d%%", pct)
+	}
+	if !r.Overflowed() || r.Overflow {
+		t.Fatalf("expected the heuristic (not a confirmed rejection) to fire: %+v", r)
+	}
+	if !strings.Contains(store.PromText(), `mtop_ctx_overflow_total{model="qwen3:32b"} 1`) {
+		t.Fatalf("overflow counter missing:\n%s", store.PromText())
+	}
+}
+
+func TestLlamaCppOverflowError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"type":"exceed_context_size_error","n_prompt_tokens":5000,"n_ctx":4096}}`)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "exceed_context_size_error") {
+		t.Fatalf("client should still see the error body untouched, got: %s", body)
+	}
+
+	r := store.Recent(1)[0]
+	if !r.Overflow || r.Ctx != 4096 || r.PromptTk != 5000 {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestVLLMOverflowError(t *testing.T) {
+	body := `{"error":"This model's maximum context length is 4096 tokens."}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, body)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(got) != body {
+		t.Fatalf("bytes should pass through untouched: got %q want %q", got, body)
+	}
+	if r := store.Recent(1)[0]; !r.Overflow {
+		t.Fatalf("expected overflow: %+v", r)
+	}
+}
+
+func TestSGLangOverflowError(t *testing.T) {
+	body := `{"error":"the request is longer than the model's context length"}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, body)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(got) != body {
+		t.Fatalf("bytes should pass through untouched: got %q want %q", got, body)
+	}
+	if r := store.Recent(1)[0]; !r.Overflow {
+		t.Fatalf("expected overflow: %+v", r)
+	}
+}
+
+func TestOllamaTruncateFalseOverflowError(t *testing.T) {
+	body := `{"error":"the input length exceeds the context length"}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, body)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	store.SetModels([]ModelInfo{{Name: "m", Ctx: 4096}})
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/api/generate", "application/json", strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(got) != body {
+		t.Fatalf("bytes should pass through untouched: got %q want %q", got, body)
+	}
+	r := store.Recent(1)[0]
+	if !r.Overflow || r.Model != "m" || r.Ctx != 4096 {
+		t.Fatalf("bad record: %+v", r)
+	}
+}
+
+func TestNon400ErrorNotRecordedAsOverflow(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"model not found"}`, http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/api/generate", "application/json", strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if got := store.Recent(1); len(got) != 0 {
+		t.Fatalf("an unrelated 404 shouldn't be recorded: %+v", got)
+	}
+}
+
+func TestOpenAITimingsUsesCacheN(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"model\":\"llama-3-8b\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		io.WriteString(w, "data: {\"model\":\"llama-3-8b\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"timings\":{\"prompt_n\":9,\"cache_n\":40,\"predicted_n\":42,\"predicted_per_second\":55.5}}\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	r := store.Recent(1)[0]
+	if r.PromptTk != 49 {
+		t.Fatalf("want prompt_n+cache_n=49, got %d", r.PromptTk)
+	}
+}
+
+func TestMetricsIncludesCPUGauge(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("metrics should not reach the upstream")
+	}))
+	defer upstream.Close()
+
+	store := NewStore(10)
+	store.SetModels([]ModelInfo{{Name: "qwen3:32b", Ctx: 4096, CPU: 38}})
+	front := proxyFor(t, upstream.URL, store)
+
+	resp, err := http.Get(front.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `mtop_model_cpu_percent{model="qwen3:32b"} 38`) {
+		t.Fatalf("missing cpu gauge:\n%s", body)
+	}
+}
+
 func TestOtherPathsPassThrough(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"models":[]}`)

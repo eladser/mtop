@@ -82,6 +82,63 @@ func TestScanMergesSources(t *testing.T) {
 	}
 }
 
+func TestScanOllamaCPUOffload(t *testing.T) {
+	tests := []struct {
+		name     string
+		fixture  string
+		wantCPU  int
+		wantCtx  int
+		wantVRAM int64
+	}{
+		{
+			name:     "partial offload",
+			fixture:  `{"models":[{"name":"qwen3:32b","size":20000000000,"size_vram":8000000000,"context_length":32768,"details":{}}]}`,
+			wantCPU:  60,
+			wantCtx:  32768,
+			wantVRAM: 8000000000,
+		},
+		{
+			name:     "full gpu",
+			fixture:  `{"models":[{"name":"qwen3:0.6b","size":1000000000,"size_vram":1000000000,"context_length":4096,"details":{}}]}`,
+			wantCPU:  0,
+			wantCtx:  4096,
+			wantVRAM: 1000000000,
+		},
+		{
+			name:     "cpu only",
+			fixture:  `{"models":[{"name":"qwen3:70b","size":40000000000,"size_vram":0,"context_length":8192,"details":{}}]}`,
+			wantCPU:  100,
+			wantCtx:  8192,
+			wantVRAM: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/ps" {
+					w.Write([]byte(tt.fixture))
+				} else {
+					w.Write([]byte(`{"models":[]}`))
+				}
+			}))
+			defer oll.Close()
+
+			rows, _, err := New([]*ollama.Client{ollama.New(oll.URL)}, "", "", "").Scan()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("expected 1 row, got %d", len(rows))
+			}
+			r := rows[0]
+			if r.CPU != tt.wantCPU || r.Ctx != tt.wantCtx || r.VRAM != tt.wantVRAM {
+				t.Fatalf("got CPU=%d Ctx=%d VRAM=%d, want CPU=%d Ctx=%d VRAM=%d",
+					r.CPU, r.Ctx, r.VRAM, tt.wantCPU, tt.wantCtx, tt.wantVRAM)
+			}
+		})
+	}
+}
+
 func TestScanMultiHost(t *testing.T) {
 	mk := func(model string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

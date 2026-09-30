@@ -25,6 +25,10 @@ import (
 // memory if a server misbehaves
 const maxBuf = 1 << 20
 
+// error bodies are small; 64KB is plenty to catch a context-length
+// message without holding a misbehaving server's output in memory
+const maxErrBuf = 64 * 1024
+
 type Proxy struct {
 	target  *url.URL
 	store   *Store
@@ -113,23 +117,44 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	openai := path == "/v1/chat/completions" || path == "/v1/completions"
 	responses := path == "/v1/responses"
 
-	var prompt string
-	if t.inspect && (ollama || openai) && req.Body != nil {
+	var prompt, reqModel string
+	if (ollama || openai) && req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		req.ContentLength = int64(len(body))
-		prompt = promptOf(body)
+		reqModel = modelOf(body)
+		if t.inspect {
+			prompt = promptOf(body)
+		}
 	}
 
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
+	// a 4xx on a generation path is worth a look: it's how llama.cpp,
+	// vLLM, SGLang and ollama (with truncate:false) report a prompt that
+	// blew the context window
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && (ollama || openai || responses) {
+		resp.Body = &errTap{rc: resp.Body, store: t.store, model: reqModel}
+		return resp, nil
+	}
 	if ollama || openai || responses {
 		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, responses: responses,
 			started: started, inspect: t.inspect, prompt: prompt}
 	}
 	return resp, nil
+}
+
+// modelOf pulls the model name out of a request body, ollama or openai
+// shape. Best effort, used to label a rejected request since the error
+// body itself rarely names the model.
+func modelOf(body []byte) string {
+	var b struct {
+		Model string `json:"model"`
+	}
+	json.Unmarshal(body, &b)
+	return b.Model
 }
 
 // promptOf digs the user's text out of a request body, ollama or openai
@@ -232,6 +257,7 @@ type tap struct {
 
 type oaiTimings struct {
 	PromptN            int     `json:"prompt_n"`
+	CacheN             int     `json:"cache_n"` // reused from context shifting; not part of prompt_n
 	PredictedN         int     `json:"predicted_n"`
 	PredictedPerSecond float64 `json:"predicted_per_second"`
 }
@@ -292,6 +318,7 @@ func (t *tap) record(line []byte) {
 		Model:      c.Model,
 		PromptTk:   c.PromptEvalCount,
 		OutTk:      c.EvalCount,
+		Ctx:        t.store.CtxFor(c.Model),
 		Total:      time.Duration(c.TotalDuration),
 		Load:       time.Duration(c.LoadDuration),
 		PromptEval: time.Duration(c.PromptEvalDuration),
@@ -359,6 +386,7 @@ func (t *tap) recordOpenAI(line []byte) {
 		Model:    c.Model,
 		PromptTk: c.Usage.PromptTokens,
 		OutTk:    c.Usage.CompletionTokens,
+		Ctx:      t.store.CtxFor(c.Model),
 		Total:    wall,
 	}
 	if s := wall.Seconds(); s > 0 {
@@ -378,10 +406,12 @@ func (t *tap) finishOpenAI() {
 	}
 	t.done = true
 	wall := time.Since(t.started)
-	r := Request{When: time.Now(), Path: t.path, Model: t.oModel, Total: wall}
+	r := Request{When: time.Now(), Path: t.path, Model: t.oModel, Ctx: t.store.CtxFor(t.oModel), Total: wall}
 	switch {
 	case t.oTimings != nil && t.oTimings.PredictedN > 0:
-		r.PromptTk = t.oTimings.PromptN
+		// prompt_n is the freshly-processed part; cache_n is what the
+		// server already had cached from earlier in the conversation
+		r.PromptTk = t.oTimings.PromptN + t.oTimings.CacheN
 		r.OutTk = t.oTimings.PredictedN
 		r.TokSec = t.oTimings.PredictedPerSecond
 	case t.oDeltas > 0:
@@ -439,6 +469,7 @@ func (t *tap) recordResponses(line []byte) {
 		Model:    model,
 		PromptTk: u.InputTokens,
 		OutTk:    u.OutputTokens,
+		Ctx:      t.store.CtxFor(model),
 		Total:    wall,
 	}
 	if s := wall.Seconds(); s > 0 {
@@ -455,4 +486,71 @@ func (t *tap) Close() error {
 		t.finishOpenAI()
 	}
 	return t.rc.Close()
+}
+
+// errTap watches a 4xx body go by looking for a context-length rejection.
+// Same rule as tap: the client gets every byte untouched, this only ever
+// reads a copy.
+type errTap struct {
+	rc    io.ReadCloser
+	store *Store
+	model string
+	buf   bytes.Buffer
+	done  bool
+}
+
+func (e *errTap) Read(b []byte) (int, error) {
+	n, err := e.rc.Read(b)
+	if n > 0 && !e.done && e.buf.Len() < maxErrBuf {
+		e.buf.Write(b[:n])
+	}
+	if err == io.EOF {
+		e.finish()
+	}
+	return n, err
+}
+
+func (e *errTap) Close() error {
+	e.finish()
+	return e.rc.Close()
+}
+
+func (e *errTap) finish() {
+	if e.done {
+		return
+	}
+	e.done = true
+	ctx, promptTk, ok := detectOverflow(e.buf.Bytes())
+	if !ok {
+		return
+	}
+	if ctx == 0 {
+		ctx = e.store.CtxFor(e.model)
+	}
+	e.store.Add(Request{When: time.Now(), Model: e.model, Overflow: true, PromptTk: promptTk, Ctx: ctx})
+}
+
+// detectOverflow looks for the handful of ways a server says "no, that
+// prompt doesn't fit". llama.cpp's own error carries exact numbers; vLLM
+// and SGLang just say so in the message; ollama (with truncate:false)
+// says so too, though without any numbers attached.
+func detectOverflow(body []byte) (ctx, promptTk int, ok bool) {
+	var lcpp struct {
+		Error struct {
+			Type          string `json:"type"`
+			NPromptTokens int    `json:"n_prompt_tokens"`
+			NCtx          int    `json:"n_ctx"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &lcpp) == nil && lcpp.Error.Type == "exceed_context_size_error" {
+		return lcpp.Error.NCtx, lcpp.Error.NPromptTokens, true
+	}
+	s := string(body)
+	switch {
+	case strings.Contains(s, "maximum context length is"), // vLLM
+		strings.Contains(s, "longer than the model's context length"),      // SGLang
+		strings.Contains(s, "the input length exceeds the context length"): // ollama, truncate:false
+		return 0, 0, true
+	}
+	return 0, 0, false
 }
