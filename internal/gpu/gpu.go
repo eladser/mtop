@@ -4,6 +4,7 @@
 package gpu
 
 import (
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -21,21 +22,43 @@ type Stats struct {
 type Reader struct {
 	nvidia string
 	amd    string
+	amdSMI *amdSMI
+	pdh    *pdhReader
 	mac    bool
 }
 
+// MTOP_GPU overrides autodetection: nvidia, amd, pdh or apple. Undocumented
+// in -help, it's here so the Windows PDH path can be exercised on a box
+// that already has nvidia-smi.
 func New() *Reader {
-	r := &Reader{mac: macSupported()}
-	if p, err := exec.LookPath("nvidia-smi"); err == nil {
-		r.nvidia = p
+	mode := os.Getenv("MTOP_GPU")
+	r := &Reader{}
+	if mode == "apple" {
+		r.mac = true
+	} else if mode == "" {
+		r.mac = macSupported()
 	}
-	if p, err := exec.LookPath("rocm-smi"); err == nil {
-		r.amd = p
+	if mode == "nvidia" || mode == "" {
+		if p, err := exec.LookPath("nvidia-smi"); err == nil {
+			r.nvidia = p
+		}
+	}
+	if mode == "amd" || mode == "" {
+		if p, err := exec.LookPath("amd-smi"); err == nil {
+			r.amdSMI = newAmdSMI(p)
+		} else if p, err := exec.LookPath("rocm-smi"); err == nil {
+			r.amd = p
+		}
+	}
+	if mode == "pdh" || (mode == "" && r.nvidia == "" && r.amd == "" && r.amdSMI == nil && !r.mac) {
+		r.pdh = newPDHReader()
 	}
 	return r
 }
 
-func (r *Reader) Available() bool { return r.nvidia != "" || r.amd != "" || r.mac }
+func (r *Reader) Available() bool {
+	return r.nvidia != "" || r.amd != "" || r.amdSMI != nil || r.pdh != nil || r.mac
+}
 
 func (r *Reader) Read() ([]Stats, error) {
 	var all []Stats
@@ -44,8 +67,15 @@ func (r *Reader) Read() ([]Stats, error) {
 		s, err := readNvidia(r.nvidia)
 		all, lastErr = append(all, s...), err
 	}
-	if r.amd != "" {
+	if r.amdSMI != nil {
+		s, err := r.amdSMI.read()
+		all, lastErr = append(all, s...), err
+	} else if r.amd != "" {
 		s, err := readAMD(r.amd)
+		all, lastErr = append(all, s...), err
+	}
+	if r.pdh != nil {
+		s, err := r.pdh.read()
 		all, lastErr = append(all, s...), err
 	}
 	if r.mac {

@@ -25,6 +25,13 @@ import (
 // memory if a server misbehaves
 const maxBuf = 1 << 20
 
+// error bodies are small; 64KB is plenty to catch a context-length
+// message without holding a misbehaving server's output in memory
+const maxErrBuf = 64 * 1024
+
+// var, not const, so tests can shrink it without allocating 8 MiB
+var maxPeek int64 = 8 << 20
+
 type Proxy struct {
 	target  *url.URL
 	store   *Store
@@ -113,17 +120,31 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	openai := path == "/v1/chat/completions" || path == "/v1/completions"
 	responses := path == "/v1/responses"
 
-	var prompt string
-	if t.inspect && (ollama || openai) && req.Body != nil {
-		body, _ := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
-		prompt = promptOf(body)
+	var prompt, reqModel string
+	if (ollama || openai || responses) && req.Body != nil {
+		// peek at most 8 MiB (base64 images can be big); anything past that
+		// streams through untouched and just doesn't get a model label
+		body, _ := io.ReadAll(io.LimitReader(req.Body, maxPeek))
+		req.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), req.Body), req.Body}
+		reqModel = modelOf(body)
+		if t.inspect {
+			prompt = promptOf(body)
+		}
 	}
 
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
 		return nil, err
+	}
+	// a 4xx on a generation path is worth a look: it's how llama.cpp,
+	// vLLM, SGLang and ollama (with truncate:false) report a prompt that
+	// blew the context window
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && (ollama || openai || responses) {
+		resp.Body = &errTap{rc: resp.Body, store: t.store, model: reqModel}
+		return resp, nil
 	}
 	if ollama || openai || responses {
 		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, responses: responses,
@@ -132,15 +153,30 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// modelOf pulls the model name out of a request body, ollama or openai
+// shape. Best effort, used to label a rejected request since the error
+// body itself rarely names the model.
+func modelOf(body []byte) string {
+	var b struct {
+		Model string `json:"model"`
+	}
+	json.Unmarshal(body, &b)
+	return b.Model
+}
+
+type chatMsg struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
 // promptOf digs the user's text out of a request body, ollama or openai
-// shape, for the inspector. Best effort.
+// shape (chat messages, completions prompt, /v1/responses input), for
+// the inspector. Best effort.
 func promptOf(body []byte) string {
 	var b struct {
-		Prompt   string `json:"prompt"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		Prompt   string          `json:"prompt"`
+		Messages []chatMsg       `json:"messages"`
+		Input    json.RawMessage `json:"input"`
 	}
 	if json.Unmarshal(body, &b) != nil {
 		return ""
@@ -148,12 +184,45 @@ func promptOf(body []byte) string {
 	if b.Prompt != "" {
 		return clip(b.Prompt)
 	}
-	for i := len(b.Messages) - 1; i >= 0; i-- {
-		if b.Messages[i].Role == "user" {
-			return clip(b.Messages[i].Content)
+	if s := lastUser(b.Messages); s != "" {
+		return clip(s)
+	}
+	var s string
+	if json.Unmarshal(b.Input, &s) == nil {
+		return clip(s)
+	}
+	var items []chatMsg
+	if json.Unmarshal(b.Input, &items) == nil {
+		return clip(lastUser(items))
+	}
+	return ""
+}
+
+func lastUser(ms []chatMsg) string {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if ms[i].Role == "user" {
+			return textOf(ms[i].Content)
 		}
 	}
 	return ""
+}
+
+// textOf reads a content that is a plain string or an array of parts
+// with text ("text" / "input_text" types).
+func textOf(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	json.Unmarshal(raw, &parts)
+	var sb strings.Builder
+	for _, p := range parts {
+		sb.WriteString(p.Text)
+	}
+	return sb.String()
 }
 
 // clip strips terminal control bytes and caps length by rune. The
@@ -196,8 +265,10 @@ type chunk struct {
 	Model    string `json:"model"`
 	Done     bool   `json:"done"`
 	Response string `json:"response"` // /api/generate
+	Thinking string `json:"thinking"` // /api/generate, reasoning models
 	Message  struct {
-		Content string `json:"content"`
+		Content  string `json:"content"`
+		Thinking string `json:"thinking"` // /api/chat, reasoning models
 	} `json:"message"` // /api/chat
 	PromptEvalCount    int   `json:"prompt_eval_count"`
 	EvalCount          int   `json:"eval_count"`
@@ -219,6 +290,7 @@ type tap struct {
 	inspect   bool
 	prompt    string
 	comp      strings.Builder
+	think     strings.Builder // reasoning-model "thinking" text, -inspect only
 	buf       bytes.Buffer
 	done      bool
 
@@ -232,6 +304,7 @@ type tap struct {
 
 type oaiTimings struct {
 	PromptN            int     `json:"prompt_n"`
+	CacheN             int     `json:"cache_n"` // reused from context shifting; not part of prompt_n
 	PredictedN         int     `json:"predicted_n"`
 	PredictedPerSecond float64 `json:"predicted_per_second"`
 }
@@ -282,6 +355,10 @@ func (t *tap) record(line []byte) {
 		t.comp.WriteString(c.Response)
 		t.comp.WriteString(c.Message.Content)
 	}
+	if t.inspect && t.think.Len() < 2048 {
+		t.think.WriteString(c.Thinking)
+		t.think.WriteString(c.Message.Thinking)
+	}
 	if !c.Done {
 		return
 	}
@@ -292,6 +369,7 @@ func (t *tap) record(line []byte) {
 		Model:      c.Model,
 		PromptTk:   c.PromptEvalCount,
 		OutTk:      c.EvalCount,
+		Ctx:        t.store.CtxFor(c.Model),
 		Total:      time.Duration(c.TotalDuration),
 		Load:       time.Duration(c.LoadDuration),
 		PromptEval: time.Duration(c.PromptEvalDuration),
@@ -302,6 +380,7 @@ func (t *tap) record(line []byte) {
 	if t.inspect {
 		r.Prompt = t.prompt
 		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
 	}
 	t.store.Add(r)
 }
@@ -331,6 +410,11 @@ func (t *tap) recordOpenAI(line []byte) {
 		Choices []struct {
 			Delta struct {
 				Content string `json:"content"`
+				// reasoning-model thinking text: llama.cpp and SGLang use
+				// reasoning_content (deepseek-style), Ollama's openai-compat
+				// layer and newer vLLM use reasoning
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"delta"`
 		} `json:"choices"`
 	}
@@ -344,8 +428,20 @@ func (t *tap) recordOpenAI(line []byte) {
 		t.oTimings = c.Timings
 	}
 	for _, ch := range c.Choices {
-		if ch.Delta.Content != "" {
+		think := ch.Delta.ReasoningContent
+		if r := ch.Delta.Reasoning; think == "" {
+			think = r
+		} else if r != think {
+			think += r
+		}
+		if ch.Delta.Content != "" || think != "" {
 			t.oDeltas++
+		}
+		if t.inspect && t.comp.Len() < 2048 {
+			t.comp.WriteString(ch.Delta.Content)
+		}
+		if t.inspect && t.think.Len() < 2048 {
+			t.think.WriteString(think)
 		}
 	}
 	if c.Usage == nil || c.Usage.CompletionTokens == 0 {
@@ -359,10 +455,16 @@ func (t *tap) recordOpenAI(line []byte) {
 		Model:    c.Model,
 		PromptTk: c.Usage.PromptTokens,
 		OutTk:    c.Usage.CompletionTokens,
+		Ctx:      t.store.CtxFor(c.Model),
 		Total:    wall,
 	}
 	if s := wall.Seconds(); s > 0 {
 		r.TokSec = float64(c.Usage.CompletionTokens) / s
+	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
 	}
 	t.store.Add(r)
 }
@@ -378,10 +480,12 @@ func (t *tap) finishOpenAI() {
 	}
 	t.done = true
 	wall := time.Since(t.started)
-	r := Request{When: time.Now(), Path: t.path, Model: t.oModel, Total: wall}
+	r := Request{When: time.Now(), Path: t.path, Model: t.oModel, Ctx: t.store.CtxFor(t.oModel), Total: wall}
 	switch {
 	case t.oTimings != nil && t.oTimings.PredictedN > 0:
-		r.PromptTk = t.oTimings.PromptN
+		// prompt_n is the freshly-processed part; cache_n is what the
+		// server already had cached from earlier in the conversation
+		r.PromptTk = t.oTimings.PromptN + t.oTimings.CacheN
 		r.OutTk = t.oTimings.PredictedN
 		r.TokSec = t.oTimings.PredictedPerSecond
 	case t.oDeltas > 0:
@@ -392,6 +496,11 @@ func (t *tap) finishOpenAI() {
 		}
 	default:
 		return
+	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
 	}
 	t.store.Add(r)
 }
@@ -404,28 +513,50 @@ func (t *tap) recordResponses(line []byte) {
 	if len(line) == 0 || bytes.Equal(line, []byte("[DONE]")) {
 		return
 	}
+	if t.inspect {
+		t.captureResponsesDelta(line)
+	}
 	type usage struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	}
+	// output items: "message" carries the answer in content[].text,
+	// "reasoning" carries the thinking in summary[].text (what most keys
+	// get back) and/or content[].text (the raw trace, org-gated)
+	type outItem struct {
+		Type    string `json:"type"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Summary []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"summary"`
+	}
 	var c struct {
-		Model    string `json:"model"`
-		Usage    *usage `json:"usage"`
+		Model    string    `json:"model"`
+		Usage    *usage    `json:"usage"`
+		Output   []outItem `json:"output"`
 		Response *struct {
-			Model string `json:"model"`
-			Usage *usage `json:"usage"`
+			Model  string    `json:"model"`
+			Usage  *usage    `json:"usage"`
+			Output []outItem `json:"output"`
 		} `json:"response"`
 	}
 	if json.Unmarshal(line, &c) != nil {
 		return
 	}
-	model, u := c.Model, c.Usage
+	model, u, out := c.Model, c.Usage, c.Output
 	if c.Response != nil {
 		if c.Response.Model != "" {
 			model = c.Response.Model
 		}
 		if c.Response.Usage != nil {
 			u = c.Response.Usage
+		}
+		if c.Response.Output != nil {
+			out = c.Response.Output
 		}
 	}
 	if u == nil || u.OutputTokens == 0 {
@@ -439,12 +570,62 @@ func (t *tap) recordResponses(line []byte) {
 		Model:    model,
 		PromptTk: u.InputTokens,
 		OutTk:    u.OutputTokens,
+		Ctx:      t.store.CtxFor(model),
 		Total:    wall,
 	}
 	if s := wall.Seconds(); s > 0 {
 		r.TokSec = float64(u.OutputTokens) / s
 	}
+	if t.inspect {
+		r.Prompt = t.prompt
+		// a plain SSE stream already filled comp/think chunk by chunk via
+		// captureResponsesDelta; a non-streaming body only has the answer
+		// here, in the final output array
+		if t.comp.Len() == 0 && t.think.Len() == 0 {
+			for _, item := range out {
+				switch item.Type {
+				case "message":
+					for _, ct := range item.Content {
+						t.comp.WriteString(ct.Text)
+					}
+				case "reasoning":
+					for _, sm := range item.Summary {
+						t.think.WriteString(sm.Text)
+					}
+					for _, ct := range item.Content {
+						t.think.WriteString(ct.Text)
+					}
+				}
+			}
+		}
+		r.Completion = clip(t.comp.String())
+		r.Thinking = clip(t.think.String())
+	}
 	t.store.Add(r)
+}
+
+// captureResponsesDelta accumulates a streamed answer/thinking event as it
+// goes by; response.output_text.delta is the answer, response.reasoning_text
+// and response.reasoning_summary_text deltas are the thinking (the raw trace
+// is org-gated, so most keys only ever see the summary one).
+func (t *tap) captureResponsesDelta(line []byte) {
+	var d struct {
+		Type  string `json:"type"`
+		Delta string `json:"delta"`
+	}
+	if json.Unmarshal(line, &d) != nil {
+		return
+	}
+	switch d.Type {
+	case "response.output_text.delta":
+		if t.comp.Len() < 2048 {
+			t.comp.WriteString(d.Delta)
+		}
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		if t.think.Len() < 2048 {
+			t.think.WriteString(d.Delta)
+		}
+	}
 }
 
 func (t *tap) Close() error {
@@ -455,4 +636,71 @@ func (t *tap) Close() error {
 		t.finishOpenAI()
 	}
 	return t.rc.Close()
+}
+
+// errTap watches a 4xx body go by looking for a context-length rejection.
+// Same rule as tap: the client gets every byte untouched, this only ever
+// reads a copy.
+type errTap struct {
+	rc    io.ReadCloser
+	store *Store
+	model string
+	buf   bytes.Buffer
+	done  bool
+}
+
+func (e *errTap) Read(b []byte) (int, error) {
+	n, err := e.rc.Read(b)
+	if room := maxErrBuf - e.buf.Len(); n > 0 && !e.done && room > 0 {
+		e.buf.Write(b[:min(n, room)])
+	}
+	if err == io.EOF {
+		e.finish()
+	}
+	return n, err
+}
+
+func (e *errTap) Close() error {
+	e.finish()
+	return e.rc.Close()
+}
+
+func (e *errTap) finish() {
+	if e.done {
+		return
+	}
+	e.done = true
+	ctx, promptTk, ok := detectOverflow(e.buf.Bytes())
+	if !ok {
+		return
+	}
+	if ctx == 0 {
+		ctx = e.store.CtxFor(e.model)
+	}
+	e.store.Add(Request{When: time.Now(), Model: e.model, Overflow: true, PromptTk: promptTk, Ctx: ctx})
+}
+
+// detectOverflow looks for the handful of ways a server says "no, that
+// prompt doesn't fit". llama.cpp's own error carries exact numbers; vLLM
+// and SGLang just say so in the message; ollama (with truncate:false)
+// says so too, though without any numbers attached.
+func detectOverflow(body []byte) (ctx, promptTk int, ok bool) {
+	var lcpp struct {
+		Error struct {
+			Type          string `json:"type"`
+			NPromptTokens int    `json:"n_prompt_tokens"`
+			NCtx          int    `json:"n_ctx"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &lcpp) == nil && lcpp.Error.Type == "exceed_context_size_error" {
+		return lcpp.Error.NCtx, lcpp.Error.NPromptTokens, true
+	}
+	s := string(body)
+	switch {
+	case strings.Contains(s, "maximum context length is"), // vLLM
+		strings.Contains(s, "longer than the model's context length"),      // SGLang
+		strings.Contains(s, "the input length exceeds the context length"): // ollama, truncate:false
+		return 0, 0, true
+	}
+	return 0, 0, false
 }

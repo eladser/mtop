@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.0 (2026-09-30)
+
+### Added
+- Partial-offload warning: an Ollama model split between GPU and system RAM gets a warn-colored row and `cpu 38%` next to its ttl. A model fully on CPU shows `cpu` in the VRAM column.
+- Context-overflow warning in the requests pane (`ctx 97%`, or `ctx over, rejected`) and the inspector. Three signals: a 4xx context error from llama.cpp, vLLM, SGLang or Ollama; Ollama prompts at 90% or more of `context_length`, which it truncates silently; and `usage.prompt_tokens` (or llama.cpp timings) against the context size llama.cpp, LM Studio and Lemonade report.
+- llama-swap (found through `-llamacpp`, or `-llamaswap`), Lemonade (`-lemonade`, :13305) and SGLang (`-sglang`, :30000). `u` unloads on llama-swap and Lemonade.
+- AMD GPUs via amd-smi, ROCm 6 and 7 output.
+- AMD and Intel GPUs on Windows through performance counters: util and memory, no temperature or power.
+- `/metrics` gains `mtop_model_cpu_percent` and `mtop_ctx_overflow_total`.
+- `-notify` also fires when a model loads partly on CPU and when a model's requests run over context (once a minute per model at most).
+- Reasoning models: thinking tokens count toward tok/s estimates (`reasoning_content` and `reasoning` deltas), and the inspector shows the thinking text separately from the answer, for Ollama native, OpenAI-style and `/v1/responses` traffic.
+- The inspector captures the completion for OpenAI-style and `/v1/responses` requests too, not just Ollama native.
+
+### Changed
+- amd-smi is preferred over rocm-smi when both are installed.
+- Models pane shows NAME, VRAM and TTL first, so the cpu and overdue markers stay visible in a narrow terminal.
+- Bubble Tea v2 and Lip Gloss v2.
+- The proxy peeks at request bodies (for the model name) up to 8 MiB; anything larger passes through unlabelled.
+
+### Fixed
+- An older Lemonade on :8000 showed up as vLLM.
+- The by-model view reshuffled rows that tied.
+- llama-swap on :8080 also showed up as a second llama.cpp row.
+- Captured prompt and completion text was written to the history file with `-history -inspect` (1.3 and 1.4). It stays in memory now, and old history lines still load.
+- The inspector never captured prompts sent as content-part arrays (`[{"type":"text",...}]`) or as `/v1/responses` `input`.
+
 ## 1.4.0 (2026-09-30)
 
 ### Added

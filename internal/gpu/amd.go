@@ -7,11 +7,9 @@ import (
 	"strings"
 )
 
-// AMD via rocm-smi's json output. The keys are long prose strings and
-// have moved around between versions, so match loosely.
-// ponytail: amd-smi is rocm-smi's replacement and worth preferring once
-// its --json shape (nested metric/static objects, not this flat kv) is
-// worth the rewrite; punting on that here.
+// AMD via rocm-smi's json output, used when amd-smi isn't on PATH. The
+// keys are long prose strings and have moved around between versions,
+// so match loosely.
 func readAMD(path string) ([]Stats, error) {
 	out, err := exec.Command(path, "--showproductname", "--showuse", "--showmeminfo", "vram", "--showtemp", "--showpower", "--json").Output()
 	if err != nil {

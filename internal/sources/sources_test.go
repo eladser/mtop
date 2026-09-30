@@ -60,7 +60,7 @@ func TestScanMergesSources(t *testing.T) {
 	}))
 	defer lms.Close()
 
-	s := New([]*ollama.Client{ollama.New(oll.URL)}, lcpp.URL, lms.URL, "")
+	s := New([]*ollama.Client{ollama.New(oll.URL)}, lcpp.URL, lms.URL, "", "", "", "")
 	rows, alive, ollErr := s.Scan()
 	if ollErr != nil {
 		t.Fatal(ollErr)
@@ -74,11 +74,68 @@ func TestScanMergesSources(t *testing.T) {
 	if rows[0].From != "ollama" || rows[0].Unload == nil {
 		t.Fatalf("ollama row should be unloadable: %+v", rows[0])
 	}
-	if rows[1].Name != "llama-3-8b.Q4_K_M.gguf" || rows[1].Note == "" {
+	if rows[1].Name != "llama-3-8b.Q4_K_M.gguf" || rows[1].Note == "" || rows[1].Ctx != 8192 {
 		t.Fatalf("bad llama.cpp row: %+v", rows[1])
 	}
 	if rows[2].From != "lm studio" || rows[2].Unload != nil {
 		t.Fatalf("lm studio row should not be unloadable: %+v", rows[2])
+	}
+}
+
+func TestScanOllamaCPUOffload(t *testing.T) {
+	tests := []struct {
+		name     string
+		fixture  string
+		wantCPU  int
+		wantCtx  int
+		wantVRAM int64
+	}{
+		{
+			name:     "partial offload",
+			fixture:  `{"models":[{"name":"qwen3:32b","size":20000000000,"size_vram":8000000000,"context_length":32768,"details":{}}]}`,
+			wantCPU:  60,
+			wantCtx:  32768,
+			wantVRAM: 8000000000,
+		},
+		{
+			name:     "full gpu",
+			fixture:  `{"models":[{"name":"qwen3:0.6b","size":1000000000,"size_vram":1000000000,"context_length":4096,"details":{}}]}`,
+			wantCPU:  0,
+			wantCtx:  4096,
+			wantVRAM: 1000000000,
+		},
+		{
+			name:     "cpu only",
+			fixture:  `{"models":[{"name":"qwen3:70b","size":40000000000,"size_vram":0,"context_length":8192,"details":{}}]}`,
+			wantCPU:  100,
+			wantCtx:  8192,
+			wantVRAM: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/ps" {
+					w.Write([]byte(tt.fixture))
+				} else {
+					w.Write([]byte(`{"models":[]}`))
+				}
+			}))
+			defer oll.Close()
+
+			rows, _, err := New([]*ollama.Client{ollama.New(oll.URL)}, "", "", "", "", "", "").Scan()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("expected 1 row, got %d", len(rows))
+			}
+			r := rows[0]
+			if r.CPU != tt.wantCPU || r.Ctx != tt.wantCtx || r.VRAM != tt.wantVRAM {
+				t.Fatalf("got CPU=%d Ctx=%d VRAM=%d, want CPU=%d Ctx=%d VRAM=%d",
+					r.CPU, r.Ctx, r.VRAM, tt.wantCPU, tt.wantCtx, tt.wantVRAM)
+			}
+		})
 	}
 }
 
@@ -96,7 +153,7 @@ func TestScanMultiHost(t *testing.T) {
 	defer a.Close()
 	defer b.Close()
 
-	rows, alive, err := New([]*ollama.Client{ollama.New(a.URL), ollama.New(b.URL)}, "", "", "").Scan()
+	rows, alive, err := New([]*ollama.Client{ollama.New(a.URL), ollama.New(b.URL)}, "", "", "", "", "", "").Scan()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +181,7 @@ func TestScanLlamacppRouterMode(t *testing.T) {
 	}))
 	defer lcpp.Close()
 
-	s := New(nil, lcpp.URL, "", "")
+	s := New(nil, lcpp.URL, "", "", "", "", "")
 	rows, ok := s.scanLlamacpp()
 	if !ok {
 		t.Fatal("expected router mode to report alive")
@@ -145,7 +202,7 @@ func TestScanLlamacppRouterIdle(t *testing.T) {
 	}))
 	defer lcpp.Close()
 
-	rows, ok := New(nil, lcpp.URL, "", "").scanLlamacpp()
+	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
 	if !ok || len(rows) != 0 {
 		t.Fatalf("idle router: want alive with no rows, got ok=%v rows=%+v", ok, rows)
 	}
@@ -157,18 +214,18 @@ func TestScanLMStudioV1(t *testing.T) {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		w.Write([]byte(`{"models":[
-			{"key":"qwen2.5-7b","quantization":{"name":"Q4_K_M"},"loaded_instances":[{"id":"qwen2.5-7b"}]},
+			{"key":"qwen2.5-7b","quantization":{"name":"Q4_K_M"},"loaded_instances":[{"id":"qwen2.5-7b","config":{"context_length":32768}}]},
 			{"key":"phi-4","quantization":{"name":"Q4_K_M"},"loaded_instances":[]}
 		]}`))
 	}))
 	defer lms.Close()
 
-	s := New(nil, "", lms.URL, "")
+	s := New(nil, "", lms.URL, "", "", "", "")
 	rows, ok := s.scanLMStudio()
 	if !ok {
 		t.Fatal("expected lm studio to report alive")
 	}
-	if len(rows) != 1 || rows[0].Name != "qwen2.5-7b" || rows[0].Quant != "Q4_K_M" {
+	if len(rows) != 1 || rows[0].Name != "qwen2.5-7b" || rows[0].Quant != "Q4_K_M" || rows[0].Ctx != 32768 {
 		t.Fatalf("bad rows: %+v", rows)
 	}
 }
@@ -183,7 +240,7 @@ func TestScanLMStudioFallsBackToV0(t *testing.T) {
 	}))
 	defer lms.Close()
 
-	s := New(nil, "", lms.URL, "")
+	s := New(nil, "", lms.URL, "", "", "", "")
 	rows, ok := s.scanLMStudio()
 	if !ok {
 		t.Fatal("expected lm studio to report alive")
@@ -199,7 +256,7 @@ func TestScanVllmMetricFallback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(nil, "", "", srv.URL)
+	s := New(nil, "", "", srv.URL, "", "", "")
 	rows, ok := s.scanVllm()
 	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "cache 50%") {
 		t.Fatalf("expected old metric name to be used as fallback: %+v ok=%v", rows, ok)
@@ -212,10 +269,164 @@ func TestScanVllmNewMetricName(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(nil, "", "", srv.URL)
+	s := New(nil, "", "", srv.URL, "", "", "")
 	rows, ok := s.scanVllm()
 	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "cache 75%") {
 		t.Fatalf("expected new metric name to be read: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanVllmRequiresVllmKey(t *testing.T) {
+	// old Lemonade builds answer /metrics on :8000 too, without any vllm: keys
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `lemonade_requests_total{model="m"} 3`+"\n")
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", srv.URL, "", "", "")
+	if rows, ok := s.scanVllm(); ok || len(rows) != 0 {
+		t.Fatalf("expected no vllm row without a vllm: key, got %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanLlamaswap(t *testing.T) {
+	var unloaded string
+	swap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/running":
+			w.Write([]byte(`{"running":[{"model":"qwen3:32b","state":"ready","ttl":300}]}`))
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/models/unload/"):
+			unloaded = strings.TrimPrefix(r.URL.Path, "/api/models/unload/")
+			w.Write([]byte("OK"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer swap.Close()
+
+	s := New(nil, "", "", "", swap.URL, "", "")
+	rows, ok := s.scanLlamaswap()
+	if !ok || len(rows) != 1 || rows[0].Name != "qwen3:32b" || !strings.Contains(rows[0].Note, "ttl 300s") {
+		t.Fatalf("bad llama-swap row: %+v ok=%v", rows, ok)
+	}
+	if err := rows[0].Unload(); err != nil || unloaded != "qwen3:32b" {
+		t.Fatalf("unload didn't hit the per-model endpoint: err=%v unloaded=%q", err, unloaded)
+	}
+}
+
+func TestScanLlamaswapFallsBackToLlamacppURL(t *testing.T) {
+	swap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/running" {
+			w.Write([]byte(`{"running":[{"model":"m","state":"ready","ttl":0}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer swap.Close()
+
+	// no -llamaswap set, so it rides on -llamacpp since that's llama-swap's default port too
+	s := New(nil, swap.URL, "", "", "", "", "")
+	rows, ok := s.scanLlamaswap()
+	if !ok || len(rows) != 1 || rows[0].Name != "m" {
+		t.Fatalf("expected fallback to llamacpp url to work: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanSkipsLlamacppWhenLlamaswapAnswers(t *testing.T) {
+	// llama-swap defaults to :8080 same as bare llama.cpp and proxies
+	// /props, so a single server here stands in for both when only
+	// -llamacpp is set
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/running":
+			w.Write([]byte(`{"running":[{"model":"qwen3:32b","state":"ready","ttl":300}]}`))
+		case "/props":
+			w.Write([]byte(`{"model_path":"/models/qwen3-32b.gguf","default_generation_settings":{"n_ctx":8192}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	for _, swap := range []string{"", srv.URL, srv.URL + "/"} {
+		s := New(nil, srv.URL, "", "", swap, "", "")
+		rows, alive, err := s.Scan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].From != "llama-swap" {
+			t.Fatalf("expected only the llama-swap row, no llama.cpp duplicate: %+v", rows)
+		}
+		for _, a := range alive {
+			if a == "llama.cpp" {
+				t.Fatalf("llama.cpp shouldn't report alive when llama-swap answers the same url: %v", alive)
+			}
+		}
+	}
+}
+
+func TestScanLemonade(t *testing.T) {
+	lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"all_models_loaded":[{"model_name":"Qwen3-0.6B-GGUF","device":"gpu","recipe_options":{"ctx_size":8192}}]}`))
+	}))
+	defer lem.Close()
+
+	s := New(nil, "", "", "", "", lem.URL, "")
+	rows, ok := s.scanLemonade()
+	if !ok || len(rows) != 1 || rows[0].Name != "Qwen3-0.6B-GGUF" || !strings.Contains(rows[0].Note, "gpu") || !strings.Contains(rows[0].Note, "8192") {
+		t.Fatalf("bad lemonade row: %+v ok=%v", rows, ok)
+	}
+	if rows[0].Ctx != 8192 || rows[0].CPU != 0 {
+		t.Fatalf("expected ctx from recipe_options and no cpu offload for a gpu model: %+v", rows[0])
+	}
+}
+
+func TestScanLemonadeCPUDevice(t *testing.T) {
+	lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"all_models_loaded":[{"model_name":"Qwen3-0.6B-GGUF","device":"cpu","recipe_options":{"ctx_size":4096}}]}`))
+	}))
+	defer lem.Close()
+
+	s := New(nil, "", "", "", "", lem.URL, "")
+	rows, ok := s.scanLemonade()
+	if !ok || len(rows) != 1 || rows[0].CPU != 100 || rows[0].Ctx != 4096 {
+		t.Fatalf("expected a fully-cpu lemonade model to report CPU=100: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanSglang(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/get_model_info":
+			w.Write([]byte(`{"model_path":"/models/Meta-Llama-3-8B"}`))
+		case "/metrics":
+			io.WriteString(w, "sglang:token_usage 0.4\nsglang:num_running_reqs 2\n")
+		}
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", "", "", "", srv.URL)
+	rows, ok := s.scanSglang()
+	if !ok || len(rows) != 1 || rows[0].Name != "Meta-Llama-3-8B" || !strings.Contains(rows[0].Note, "kv 40%") || !strings.Contains(rows[0].Note, "2 running") {
+		t.Fatalf("bad sglang row: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanSglangUnderscorePrefix(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/get_model_info":
+			w.Write([]byte(`{"model_path":"/models/m"}`))
+		case "/metrics":
+			io.WriteString(w, "sglang_token_usage 0.1\nsglang_num_running_reqs 1\n")
+		}
+	}))
+	defer srv.Close()
+
+	s := New(nil, "", "", "", "", "", srv.URL)
+	rows, ok := s.scanSglang()
+	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "kv 10%") {
+		t.Fatalf("expected underscore-prefixed metrics to be read: %+v ok=%v", rows, ok)
 	}
 }
 
@@ -225,7 +436,7 @@ func TestGetJSONNon2xxIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(nil, "", "", "")
+	s := New(nil, "", "", "", "", "", "")
 	var v any
 	if err := s.getJSON(srv.URL, &v); err == nil {
 		t.Fatal("expected an error on non-2xx status")
@@ -238,14 +449,14 @@ func TestGetPromLabeledNon2xxIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(nil, "", "", "")
+	s := New(nil, "", "", "", "", "", "")
 	if _, err := s.getPromLabeled(srv.URL); err == nil {
 		t.Fatal("expected an error on non-2xx status")
 	}
 }
 
 func TestScanDeadSources(t *testing.T) {
-	s := New([]*ollama.Client{ollama.New("http://127.0.0.1:1")}, "http://127.0.0.1:1", "", "")
+	s := New([]*ollama.Client{ollama.New("http://127.0.0.1:1")}, "http://127.0.0.1:1", "", "", "", "", "")
 	rows, alive, ollErr := s.Scan()
 	if ollErr == nil {
 		t.Fatal("expected ollama error")

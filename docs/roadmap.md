@@ -37,6 +37,22 @@
 - request inspector (`i`, with `-inspect`): the last request's prompt, completion, and load/prompt/decode timing
 - session energy on the TOK/S line: watt-hours used and tokens per watt-hour, estimated from GPU power
 
+## 1.4 (shipped)
+
+- `/v1/responses` requests recorded by the proxy
+- llama.cpp router mode lists every loaded model
+- LM Studio's v1 REST API, v0 as the fallback
+
+## 1.5 (shipped)
+
+- Partial-offload warning: `cpu 38%` on a model that's split between VRAM and system RAM
+- Context-overflow warning on requests (`ctx 97%`, `ctx over, rejected`), from server errors, ollama's silent truncation, and prompt tokens against the known context size
+- llama-swap, Lemonade and SGLang next to the others, with unload on llama-swap and Lemonade
+- AMD through amd-smi (rocm-smi still works); AMD and Intel on Windows through performance counters
+- Offload and overflow in `/metrics` and `-notify`
+- Bubble Tea v2
+- Reasoning models: thinking counted and shown; inspector capture for OpenAI-style and `/v1/responses` traffic
+
 ## Later / maybe
 
 - powermetrics without sudo (a small signed helper, or live with the requirement)

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/eladser/mtop/internal/gpu"
 	"github.com/eladser/mtop/internal/proxy"
@@ -25,6 +25,12 @@ var (
 	selSt   = lipgloss.NewStyle().Foreground(accent)
 	paneSt  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(dim).Padding(0, 1)
 )
+
+// paneBorder is the border's horizontal size on paneSt. lipgloss v2's
+// Style.Width sets the outer (border-box) width, while v1 set the
+// interior (padding+content) width and added the border on top, so
+// callers have to add this back in to get the same interior width.
+var paneBorder = paneSt.GetHorizontalBorderSize()
 
 type App struct {
 	scan      *sources.Scanner
@@ -59,6 +65,9 @@ type App struct {
 	flash      string
 	flashAt    time.Time
 	flashOk    bool
+
+	lastOverflowCheck  time.Time            // requests older than this were already considered
+	lastOverflowNotify map[string]time.Time // per-model cooldown for ctx-overflow notifications
 }
 
 type trace struct{ util, mem []float64 }
@@ -66,7 +75,7 @@ type trace struct{ util, mem []float64 }
 func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string), memAlert, tempAlert int, inspect bool) *App {
 	return &App{scan: scan, gpu: g, store: store, listen: listen, version: version,
 		idleAfter: idleAfter, notify: notify, memAlert: memAlert, tempAlert: tempAlert, inspect: inspect,
-		seen: map[string]time.Time{}, gpuHist: map[string]*trace{}}
+		seen: map[string]time.Time{}, gpuHist: map[string]*trace{}, lastOverflowNotify: map[string]time.Time{}}
 }
 
 type tick struct{}
@@ -88,6 +97,7 @@ type unloaded struct {
 
 func (a *App) Init() tea.Cmd {
 	a.start = time.Now()
+	a.lastOverflowCheck = a.start
 	return a.poll
 }
 
@@ -163,7 +173,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = m.Width, m.Height
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch m.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
@@ -193,8 +203,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.rows, a.alive, a.disk, a.ollErr = m.rows, m.alive, m.disk, m.ollErr
 		a.gpus, a.gpuErr = m.gpus, m.gpuErr
 		a.store.SetGPU(samples(a.gpus))
+		a.store.SetModels(modelInfos(a.rows))
 		a.recordGPU()
 		a.addEnergy()
+		a.notifyOverflow()
 		// fire a desktop notification when an alert first shows up, and
 		// again only if the alert text changes
 		if note := a.gpuAlert(); a.notify != nil && note != "" && note != a.lastNote {
@@ -212,6 +224,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			current[r.Name] = true
 			if _, ok := a.seen[r.Name]; !ok {
 				a.seen[r.Name] = now
+				if a.notify != nil && partialCPU(r) {
+					a.notify(fmt.Sprintf("%s is %d%% on CPU", r.Name, r.CPU))
+				}
 			}
 		}
 		for name := range a.seen {
@@ -243,26 +258,28 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) View() string {
+func (a *App) View() tea.View {
 	if a.w == 0 {
-		return "starting..."
+		return tea.NewView("starting...")
 	}
 	paneW := (a.w - 6) / 2
 	top := lipgloss.JoinHorizontal(lipgloss.Top,
-		paneSt.Width(paneW).Render(a.modelsPane(paneW)),
-		paneSt.Width(paneW).Render(a.gpuPane()),
+		paneSt.Width(paneW+paneBorder).Render(a.modelsPane(paneW)),
+		paneSt.Width(paneW+paneBorder).Render(a.gpuPane()),
 	)
 	var mid string
 	switch {
 	case a.inspecting:
-		mid = paneSt.Width(a.w - 4).Render(a.inspectorPane())
+		mid = paneSt.Width(a.w - 4 + paneBorder).Render(a.inspectorPane())
 	case a.byModel:
-		mid = paneSt.Width(a.w - 4).Render(a.byModelPane())
+		mid = paneSt.Width(a.w - 4 + paneBorder).Render(a.byModelPane())
 	default:
-		mid = paneSt.Width(a.w - 4).Render(a.requestsPane())
+		mid = paneSt.Width(a.w - 4 + paneBorder).Render(a.requestsPane())
 	}
-	spark := paneSt.Width(a.w - 4).Render(a.throughputPane())
-	return lipgloss.JoinVertical(lipgloss.Left, top, mid, spark, a.statusLine())
+	spark := paneSt.Width(a.w - 4 + paneBorder).Render(a.throughputPane())
+	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, top, mid, spark, a.statusLine()))
+	v.AltScreen = true
+	return v
 }
 
 // how many request rows fit without pushing the status line off screen
@@ -345,9 +362,11 @@ func (a *App) modelsPane(w int) string {
 	case len(a.rows) == 0:
 		b.WriteString("\n" + dimSt.Render("nothing loaded, run a model and it shows up here"))
 	default:
-		head := fmt.Sprintf("%-22s %8s %6s %6s  %s", "NAME", "SIZE", "QUANT", "VRAM", "TTL")
+		// name, vram and ttl first: in a half-width pane on a 100-column
+		// terminal the tail gets cut, and the cpu/overdue warnings live in ttl
+		head := fmt.Sprintf("%-20s %6s  %-18s %8s %6s", "NAME", "VRAM", "TTL", "SIZE", "QUANT")
 		if multi {
-			head = fmt.Sprintf("%-22s %-9s %6s %6s  %s", "NAME", "FROM", "QUANT", "VRAM", "TTL")
+			head = fmt.Sprintf("%-20s %6s  %-18s %-9s %6s", "NAME", "VRAM", "TTL", "FROM", "QUANT")
 		}
 		b.WriteString("\n" + dimSt.Render("  "+trunc(head, lineW)))
 		for i, r := range a.rows {
@@ -355,7 +374,7 @@ func (a *App) modelsPane(w int) string {
 			switch {
 			case i == a.sel:
 				b.WriteString("\n" + selSt.Render("▸ "+line))
-			case overdue(r):
+			case overdue(r), partialCPU(r):
 				b.WriteString("\n" + warnSt.Render("  "+line))
 			default:
 				b.WriteString("\n  " + line)
@@ -369,13 +388,17 @@ func (a *App) modelsPane(w int) string {
 // can't cut an ansi sequence in half.
 func (a *App) modelLine(r sources.Row, multi bool) string {
 	vram := "—"
-	if r.VRAM > 0 {
+	switch {
+	case r.VRAM > 0:
 		vram = gib(r.VRAM)
+	case r.CPU == 100:
+		vram = "cpu"
 	}
+	ttl := trunc(ttlFor(r), 18)
 	if multi {
-		return fmt.Sprintf("%-22s %-9s %6s %6s  %s", trunc(r.Name, 22), r.From, r.Quant, vram, ttlFor(r))
+		return fmt.Sprintf("%-20s %6s  %-18s %-9s %6s", trunc(r.Name, 20), vram, ttl, r.From, r.Quant)
 	}
-	return fmt.Sprintf("%-22s %8s %6s %6s  %s", trunc(r.Name, 22), r.Size, r.Quant, vram, ttlFor(r))
+	return fmt.Sprintf("%-20s %6s  %-18s %8s %6s", trunc(r.Name, 20), vram, ttl, r.Size, r.Quant)
 }
 
 func ttlFor(r sources.Row) string {
@@ -387,7 +410,11 @@ func ttlFor(r sources.Row) string {
 	case r.Expires.IsZero():
 		return "—"
 	}
-	return time.Until(r.Expires).Round(time.Second).String()
+	ttl := time.Until(r.Expires).Round(time.Second).String()
+	if partialCPU(r) {
+		return fmt.Sprintf("cpu %d%% · %s", r.CPU, ttl)
+	}
+	return ttl
 }
 
 func trunc(s string, w int) string {
@@ -400,6 +427,63 @@ func trunc(s string, w int) string {
 
 func overdue(r sources.Row) bool {
 	return !r.Expires.IsZero() && time.Now().After(r.Expires)
+}
+
+// partialCPU is a model split across GPU and system RAM, as opposed to
+// fully offloaded (0%) or fully on CPU (100%, which isn't a warning, just
+// how the model was loaded).
+func partialCPU(r sources.Row) bool {
+	return r.CPU > 0 && r.CPU < 100
+}
+
+func modelInfos(rows []sources.Row) []proxy.ModelInfo {
+	out := make([]proxy.ModelInfo, len(rows))
+	for i, r := range rows {
+		out[i] = proxy.ModelInfo{Name: r.Name, Ctx: r.Ctx, CPU: r.CPU}
+	}
+	return out
+}
+
+// notifyOverflow fires a desktop notification the first time a model's
+// requests start running over context, then stays quiet on that model
+// for a minute so a burst of rejected requests doesn't flood the desktop.
+func (a *App) notifyOverflow() {
+	if a.notify == nil {
+		return
+	}
+	recent := a.store.Recent(32)
+	newest := a.lastOverflowCheck
+	for i := len(recent) - 1; i >= 0; i-- { // oldest first
+		r := recent[i]
+		if !r.When.After(a.lastOverflowCheck) || !r.Overflowed() {
+			continue
+		}
+		if r.When.After(newest) {
+			newest = r.When
+		}
+		if last, ok := a.lastOverflowNotify[r.Model]; ok && r.When.Sub(last) < time.Minute {
+			continue
+		}
+		msg := fmt.Sprintf("%s is over context, requests are being rejected", r.Model)
+		if !r.Overflow {
+			msg = fmt.Sprintf("%s is at %d%% of its context, older messages may be dropped", r.Model, r.CtxPercent())
+		}
+		a.notify(msg)
+		a.lastOverflowNotify[r.Model] = r.When
+	}
+	a.lastOverflowCheck = newest
+}
+
+// ctxMarker is the short requests-pane label for a request that used up
+// (or blew past) the model's context window.
+func ctxMarker(r proxy.Request) string {
+	switch {
+	case r.Overflow:
+		return "ctx over, rejected"
+	case r.CtxPercent() >= 90:
+		return fmt.Sprintf("ctx %d%%", r.CtxPercent())
+	}
+	return ""
 }
 
 func (a *App) gpuPane() string {
@@ -493,6 +577,9 @@ func (a *App) requestsPane() string {
 	for _, r := range reqs {
 		b.WriteString(fmt.Sprintf("\n%-9s %-26s %10.1f %6d %8d  %s",
 			r.When.Format("15:04:05"), r.Model, r.TokSec, r.OutTk, r.PromptTk, r.Total.Round(10*time.Millisecond)))
+		if m := ctxMarker(r); m != "" {
+			b.WriteString("  " + warnSt.Render(m))
+		}
 	}
 	return b.String()
 }
@@ -558,7 +645,17 @@ func (a *App) inspectorPane() string {
 	b.WriteString(dimSt.Render("  " + r.When.Format("15:04:05") + " " + r.Model))
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("load %s · prompt %s · %d→%d tok · %.1f tok/s",
 		r.Load.Round(time.Millisecond), r.PromptEval.Round(time.Millisecond), r.PromptTk, r.OutTk, r.TokSec)))
+	switch {
+	case r.Ctx > 0 && ctxMarker(r) != "":
+		b.WriteString("\n" + warnSt.Render(fmt.Sprintf("context %d/%d (%d%%), older messages likely dropped",
+			r.PromptTk, r.Ctx, r.CtxPercent())))
+	case r.Overflow:
+		b.WriteString("\n" + warnSt.Render("context over, older messages likely dropped"))
+	}
 	b.WriteString("\n\n" + titleSt.Render("prompt") + "\n" + wrap(r.Prompt, a.w-6))
+	if r.Thinking != "" {
+		b.WriteString("\n\n" + titleSt.Render("thinking") + "\n" + dimSt.Render(wrap(r.Thinking, a.w-6)))
+	}
 	b.WriteString("\n\n" + titleSt.Render("completion") + "\n" + wrap(r.Completion, a.w-6))
 	return b.String()
 }

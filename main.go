@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eladser/mtop/internal/compare"
 	"github.com/eladser/mtop/internal/gpu"
@@ -59,15 +59,18 @@ func runTop() {
 	llamacpp := flag.String("llamacpp", cfg("MTOP_LLAMACPP", "http://127.0.0.1:8080"), "llama.cpp server url (empty to skip)")
 	lmstudio := flag.String("lmstudio", cfg("MTOP_LMSTUDIO", "http://127.0.0.1:1234"), "lm studio url (empty to skip)")
 	vllm := flag.String("vllm", cfg("MTOP_VLLM", "http://127.0.0.1:8000"), "vllm url (empty to skip)")
+	llamaswap := flag.String("llamaswap", cfg("MTOP_LLAMASWAP", ""), "llama-swap url, if different from -llamacpp (empty rides on -llamacpp)")
+	lemonade := flag.String("lemonade", cfg("MTOP_LEMONADE", "http://127.0.0.1:13305"), "lemonade url (empty to skip)")
+	sglang := flag.String("sglang", cfg("MTOP_SGLANG", "http://127.0.0.1:30000"), "sglang url (empty to skip)")
 	listen := flag.String("listen", cfg("MTOP_LISTEN", "127.0.0.1:4321"), "proxy listen address")
 	target := flag.String("target", cfg("MTOP_TARGET", ""), "proxy upstream (defaults to the ollama url)")
 	noProxy := flag.Bool("no-proxy", false, "don't run the request proxy")
 	idle := flag.Duration("idle-unload", dur(cfg("MTOP_IDLE_UNLOAD", "")), "unload models with no traffic for this long (0 = off), e.g. 15m")
-	notifyOn := flag.Bool("notify", false, "desktop notification when a gpu hits the alert line")
+	notifyOn := flag.Bool("notify", false, "desktop notification on a gpu alert, cpu offload, or context overflow")
 	history := flag.Bool("history", false, "remember recent requests across restarts (~/.mtop/history.jsonl)")
 	memAlert := flag.Int("mem-alert", 93, "gpu memory percent that turns the alert line on")
 	tempAlert := flag.Int("temp-alert", 87, "gpu temperature in celsius that turns the alert line on")
-	inspect := flag.Bool("inspect", false, "capture prompt and completion text so the inspector (i) can show them")
+	inspect := flag.Bool("inspect", false, "capture prompt, thinking and completion text for the inspector (i); kept in memory, never written to history")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -113,9 +116,9 @@ func runTop() {
 			olls = append(olls, ollama.New(h))
 		}
 	}
-	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm)
+	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm, *llamaswap, *lemonade, *sglang)
 	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert, *inspect)
-	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(app).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
