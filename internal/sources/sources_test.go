@@ -348,17 +348,19 @@ func TestScanSkipsLlamacppWhenLlamaswapAnswers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(nil, srv.URL, "", "", "", "", "")
-	rows, alive, err := s.Scan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].From != "llama-swap" {
-		t.Fatalf("expected only the llama-swap row, no llama.cpp duplicate: %+v", rows)
-	}
-	for _, a := range alive {
-		if a == "llama.cpp" {
-			t.Fatalf("llama.cpp shouldn't report alive when llama-swap answers the same url: %v", alive)
+	for _, swap := range []string{"", srv.URL, srv.URL + "/"} {
+		s := New(nil, srv.URL, "", "", swap, "", "")
+		rows, alive, err := s.Scan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].From != "llama-swap" {
+			t.Fatalf("expected only the llama-swap row, no llama.cpp duplicate: %+v", rows)
+		}
+		for _, a := range alive {
+			if a == "llama.cpp" {
+				t.Fatalf("llama.cpp shouldn't report alive when llama-swap answers the same url: %v", alive)
+			}
 		}
 	}
 }

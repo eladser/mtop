@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/eladser/mtop/internal/ollama"
@@ -43,7 +44,7 @@ func New(olls []*ollama.Client, llamacpp, lmstudio, vllm, llamaswap, lemonade, s
 		llamacpp:  llamacpp,
 		lmstudio:  lmstudio,
 		vllm:      vllm,
-		llamaswap: llamaswap,
+		llamaswap: strings.TrimRight(llamaswap, "/"),
 		lemonade:  lemonade,
 		sglang:    sglang,
 		hc:        &http.Client{Timeout: 800 * time.Millisecond},
@@ -96,7 +97,7 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 	// there, scanLlamacpp would be talking to the same server (it proxies
 	// /props) and produce a duplicate or phantom row, so skip it.
 	swapRows, swapOK := s.scanLlamaswap()
-	swapOnLlamacppURL := swapOK && s.llamaswap == "" && s.llamacpp != ""
+	swapOnLlamacppURL := swapOK && s.llamacpp != "" && (s.llamaswap == "" || s.llamaswap == strings.TrimRight(s.llamacpp, "/"))
 
 	if !swapOnLlamacppURL {
 		if r, ok := s.scanLlamacpp(); ok {

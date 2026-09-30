@@ -121,7 +121,7 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	responses := path == "/v1/responses"
 
 	var prompt, reqModel string
-	if (ollama || openai) && req.Body != nil {
+	if (ollama || openai || responses) && req.Body != nil {
 		// peek at most 8 MiB (base64 images can be big); anything past that
 		// streams through untouched and just doesn't get a model label
 		body, _ := io.ReadAll(io.LimitReader(req.Body, maxPeek))
@@ -508,8 +508,8 @@ type errTap struct {
 
 func (e *errTap) Read(b []byte) (int, error) {
 	n, err := e.rc.Read(b)
-	if n > 0 && !e.done && e.buf.Len() < maxErrBuf {
-		e.buf.Write(b[:n])
+	if room := maxErrBuf - e.buf.Len(); n > 0 && !e.done && room > 0 {
+		e.buf.Write(b[:min(n, room)])
 	}
 	if err == io.EOF {
 		e.finish()

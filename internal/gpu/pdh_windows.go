@@ -77,6 +77,7 @@ func (p *pdhReader) addCounters() error {
 		return fmt.Errorf("pdh: add gfx counter: %#x", r)
 	}
 	if r, _, _ := procPdhAddEnglishCtr.Call(p.query, uintptr(unsafe.Pointer(memPath)), 0, uintptr(unsafe.Pointer(&mem))); r != 0 {
+		procPdhRemoveCounter.Call(gfx)
 		return fmt.Errorf("pdh: add mem counter: %#x", r)
 	}
 	p.gfx, p.mem = gfx, mem
@@ -90,7 +91,12 @@ func (p *pdhReader) addCounters() error {
 func (p *pdhReader) readd() {
 	procPdhRemoveCounter.Call(p.gfx)
 	procPdhRemoveCounter.Call(p.mem)
-	p.addCounters()
+	p.gfx, p.mem = 0, 0
+	// on failure, wait out the interval before trying again rather than
+	// retrying (and failing) on every poll
+	if p.addCounters() != nil {
+		p.added = time.Now()
+	}
 }
 
 func (p *pdhReader) read() ([]Stats, error) {
