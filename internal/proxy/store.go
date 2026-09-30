@@ -21,6 +21,33 @@ type Request struct {
 	Prompt     string        // captured only with -inspect
 	Completion string        // captured only with -inspect
 	Estimated  bool          // OutTk guessed from chunk count, not a real usage block
+	Ctx        int           // model's context length, 0 if unknown
+	Overflow   bool          // server rejected the request as over context
+}
+
+// CtxPercent is how much of the model's context window the prompt used,
+// or -1 when the context length isn't known.
+func (r Request) CtxPercent() int {
+	if r.Ctx <= 0 {
+		return -1
+	}
+	return r.PromptTk * 100 / r.Ctx
+}
+
+// Overflowed reports a request that blew the context budget, either
+// confirmed by the server (Overflow) or guessed from prompt size against
+// a known context length (ollama/ollama#14259: silent truncation above
+// ~90% isn't rejected, just quietly drops older messages).
+func (r Request) Overflowed() bool {
+	return r.Overflow || r.CtxPercent() >= 90
+}
+
+// ModelInfo is what the ctx-overflow heuristic and the cpu-offload gauge
+// need per loaded model.
+type ModelInfo struct {
+	Name string
+	Ctx  int
+	CPU  int
 }
 
 // GPUSample is the slice of GPU state /metrics re-exports. It's a copy
@@ -36,16 +63,18 @@ type GPUSample struct {
 
 // Store keeps the last N proxied requests, newest first.
 type Store struct {
-	mu    sync.Mutex
-	reqs  []Request
-	gpus  []GPUSample
-	max   int
-	err   error
-	onAdd func(Request)
+	mu       sync.Mutex
+	reqs     []Request
+	gpus     []GPUSample
+	models   []ModelInfo
+	overflow map[string]int // requests recorded as over context, per model
+	max      int
+	err      error
+	onAdd    func(Request)
 }
 
 func NewStore(max int) *Store {
-	return &Store{max: max}
+	return &Store{max: max, overflow: map[string]int{}}
 }
 
 func (s *Store) Add(r Request) {
@@ -53,6 +82,9 @@ func (s *Store) Add(r Request) {
 	s.reqs = append([]Request{r}, s.reqs...)
 	if len(s.reqs) > s.max {
 		s.reqs = s.reqs[:s.max]
+	}
+	if r.Overflowed() {
+		s.overflow[r.Model]++
 	}
 	fn := s.onAdd
 	s.mu.Unlock()
@@ -85,6 +117,28 @@ func (s *Store) SetGPU(g []GPUSample) {
 	s.mu.Lock()
 	s.gpus = g
 	s.mu.Unlock()
+}
+
+// SetModels stashes what's currently loaded, so the proxy can look up a
+// model's context length while it's recording a request and /metrics can
+// report cpu offload.
+func (s *Store) SetModels(m []ModelInfo) {
+	s.mu.Lock()
+	s.models = m
+	s.mu.Unlock()
+}
+
+// CtxFor is the context length mtop last saw for a model, or 0 if it
+// isn't currently loaded (or the server doesn't report one).
+func (s *Store) CtxFor(model string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.models {
+		if m.Name == model {
+			return m.Ctx
+		}
+	}
+	return 0
 }
 
 func (s *Store) Recent(n int) []Request {
@@ -198,6 +252,11 @@ func (s *Store) PromText() string {
 	reqs := make([]Request, len(s.reqs))
 	copy(reqs, s.reqs)
 	gpus := s.gpus
+	models := s.models
+	overflow := make(map[string]int, len(s.overflow))
+	for k, v := range s.overflow {
+		overflow[k] = v
+	}
 	s.mu.Unlock()
 
 	var b strings.Builder
@@ -209,6 +268,17 @@ func (s *Store) PromText() string {
 	p50, p95 := percentiles(reqs)
 	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.5\"} %.1f\n", p50)
 	fmt.Fprintf(&b, "mtop_tok_per_s{quantile=\"0.95\"} %.1f\n", p95)
+	for _, m := range models {
+		fmt.Fprintf(&b, "mtop_model_cpu_percent{model=%q} %d\n", m.Name, m.CPU)
+	}
+	overflowNames := make([]string, 0, len(overflow))
+	for name := range overflow {
+		overflowNames = append(overflowNames, name)
+	}
+	sort.Strings(overflowNames)
+	for _, name := range overflowNames {
+		fmt.Fprintf(&b, "mtop_ctx_overflow_total{model=%q} %d\n", name, overflow[name])
+	}
 	for _, g := range gpus {
 		fmt.Fprintf(&b, "mtop_gpu_util{gpu=%q} %d\n", g.Name, g.Util)
 		fmt.Fprintf(&b, "mtop_gpu_mem_used_mib{gpu=%q} %d\n", g.Name, g.MemUsed)
