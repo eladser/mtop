@@ -91,9 +91,18 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 		alive = append(alive, "ollama")
 		ollErr = nil // at least one answered
 	}
-	if r, ok := s.scanLlamacpp(); ok {
-		alive = append(alive, "llama.cpp")
-		rows = append(rows, r...)
+	// llama-swap defaults to the same :8080 port as bare llama.cpp and
+	// falls back to -llamacpp when -llamaswap isn't set; when it answers
+	// there, scanLlamacpp would be talking to the same server (it proxies
+	// /props) and produce a duplicate or phantom row, so skip it.
+	swapRows, swapOK := s.scanLlamaswap()
+	swapOnLlamacppURL := swapOK && s.llamaswap == "" && s.llamacpp != ""
+
+	if !swapOnLlamacppURL {
+		if r, ok := s.scanLlamacpp(); ok {
+			alive = append(alive, "llama.cpp")
+			rows = append(rows, r...)
+		}
 	}
 	if r, ok := s.scanLMStudio(); ok {
 		alive = append(alive, "lm studio")
@@ -103,9 +112,9 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 		alive = append(alive, "vllm")
 		rows = append(rows, r...)
 	}
-	if r, ok := s.scanLlamaswap(); ok {
+	if swapOK {
 		alive = append(alive, "llama-swap")
-		rows = append(rows, r...)
+		rows = append(rows, swapRows...)
 	}
 	if r, ok := s.scanLemonade(); ok {
 		alive = append(alive, "lemonade")
