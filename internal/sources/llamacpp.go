@@ -37,7 +37,7 @@ func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 		note = fmt.Sprintf("kv %.0f%% · %d running",
 			m["llamacpp:kv_cache_usage_ratio"]*100, int(m["llamacpp:requests_processing"]))
 	}
-	row := Row{Name: name, From: "llama.cpp", Note: note}
+	row := Row{Name: name, From: "llama.cpp", Note: note, Ctx: props.Settings.NCtx}
 	if props.Settings.NCtx > 0 {
 		row.Size = fmt.Sprintf("%dk ctx", props.Settings.NCtx/1024)
 	}

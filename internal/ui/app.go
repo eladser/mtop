@@ -381,7 +381,7 @@ func (a *App) modelLine(r sources.Row, multi bool) string {
 	switch {
 	case r.VRAM > 0:
 		vram = gib(r.VRAM)
-	case strings.HasPrefix(r.From, "ollama"):
+	case r.CPU == 100:
 		vram = "cpu"
 	}
 	if multi {

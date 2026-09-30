@@ -21,7 +21,10 @@ func (s *Scanner) scanLMStudioV1() ([]Row, bool) {
 				Name string `json:"name"`
 			} `json:"quantization"`
 			LoadedInstances []struct {
-				ID string `json:"id"`
+				ID     string `json:"id"`
+				Config struct {
+					ContextLength int `json:"context_length"`
+				} `json:"config"`
 			} `json:"loaded_instances"`
 		} `json:"models"`
 	}
@@ -35,7 +38,7 @@ func (s *Scanner) scanLMStudioV1() ([]Row, bool) {
 			if name == "" {
 				name = m.Key
 			}
-			rows = append(rows, Row{Name: name, Quant: m.Quantization.Name, From: "lm studio"})
+			rows = append(rows, Row{Name: name, Quant: m.Quantization.Name, Ctx: inst.Config.ContextLength, From: "lm studio"})
 		}
 	}
 	return rows, true

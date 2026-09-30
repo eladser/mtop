@@ -23,12 +23,20 @@ func (s *Scanner) scanLemonade() ([]Row, bool) {
 	for _, m := range resp.AllModelsLoaded {
 		m := m
 		note := m.Device
-		if ctx, ok := m.RecipeOptions["ctx_size"].(float64); ok && ctx > 0 {
-			note = fmt.Sprintf("%s · ctx %d", m.Device, int(ctx))
+		ctx := 0
+		if c, ok := m.RecipeOptions["ctx_size"].(float64); ok && c > 0 {
+			ctx = int(c)
+			note = fmt.Sprintf("%s · ctx %d", m.Device, ctx)
+		}
+		cpu := 0
+		if m.Device == "cpu" {
+			cpu = 100
 		}
 		rows = append(rows, Row{
 			Name:   m.ModelName,
 			Note:   note,
+			Ctx:    ctx,
+			CPU:    cpu,
 			From:   "lemonade",
 			Unload: func() error { return s.unloadLemonade(m.ModelName) },
 		})
