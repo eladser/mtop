@@ -6,8 +6,8 @@ import (
 )
 
 // llama.cpp server: /props has the loaded model, /metrics (needs
-// --metrics on launch) has kv-cache use and how many requests are in
-// flight right now.
+// --metrics on launch) has how many requests are in flight right now,
+// plus kv-cache use on builds that still report it.
 func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 	if s.llamacpp == "" {
 		return nil, false
@@ -34,8 +34,11 @@ func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 	}
 	note := ""
 	if m, err := s.getProm(s.llamacpp + "/metrics"); err == nil {
-		note = fmt.Sprintf("kv %.0f%% · %d running",
-			m["llamacpp:kv_cache_usage_ratio"]*100, int(m["llamacpp:requests_processing"]))
+		note = fmt.Sprintf("%d running", int(m["llamacpp:requests_processing"]))
+		// current llama.cpp dropped the kv gauge; missing isn't 0%
+		if v, ok := m["llamacpp:kv_cache_usage_ratio"]; ok {
+			note = fmt.Sprintf("kv %.0f%% · %s", v*100, note)
+		}
 	}
 	row := Row{Name: name, From: "llama.cpp", Note: note, Ctx: props.Settings.NCtx}
 	if props.Settings.NCtx > 0 {

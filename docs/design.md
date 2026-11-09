@@ -32,7 +32,7 @@ Keyboard-driven, htop conventions, dark, no mouse.
 |--------|------|-----|
 | Ollama | loaded models, VRAM, ttl | `GET /api/ps`, `/api/tags` |
 | Ollama | per-request tokens + timings | through the proxy only. Ollama has no metrics endpoint; `eval_count`/`eval_duration` ride on the response itself, so only the caller sees them |
-| llama.cpp | model from `/props`; kv-cache + in-flight from `/metrics` | `/metrics` and `/slots` need `--metrics` / `--slots` on launch |
+| llama.cpp | model from `/props`; running requests from `/metrics`, plus kv-cache use on builds that still report it | `/metrics` and `/slots` need `--metrics` / `--slots` on launch |
 | LM Studio | loaded models | `GET /api/v0/models`, rows with `state: "loaded"` |
 | vLLM | model + cache use + running count | `/metrics`, prometheus text, model name from the label |
 | GPU | util, mem, temp, power | `nvidia-smi` / `amd-smi` / `rocm-smi` query output, no cgo. Windows AMD and Intel: PDH performance counters (util and memory only). Apple Silicon: unified-memory from `sysctl` + `vm_stat`, plus gpu utilization from `powermetrics` when mtop runs as root |
