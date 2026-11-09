@@ -429,6 +429,94 @@ func TestScanLemonadeCPUDevice(t *testing.T) {
 	}
 }
 
+// /v1/stats example from Lemonade v2026.43.3 docs/api/lemonade.md, with the
+// "live" object swapped per test case
+const lemonadeStats = `{
+  "time_to_first_token": 2.14,
+  "tokens_per_second": 33.33,
+  "input_tokens": 128,
+  "output_tokens": 5,
+  "prompt_tokens": 9,
+  "cache_tokens": 96,
+  "request_count_total": 12,
+  "input_tokens_total": 1536,
+  "output_tokens_total": 60,
+  "prompt_tokens_total": 108,
+  "cache_tokens_total": 1152,
+  "routing_decisions_total": 4,
+  "routing_switches_total": 1,
+  "live": `
+
+const lemonadeOneModel = `{"all_models_loaded":[{"model_name":"Qwen3-0.6B-GGUF","device":"gpu","recipe_options":{"ctx_size":8192}}]}`
+
+func TestScanLemonadeLiveStats(t *testing.T) {
+	tests := []struct {
+		name string
+		live string
+		want string
+	}{
+		{"idle", `{"active_requests": 0, "estimated_tokens_per_second": 0.0}`, "gpu · ctx 8192"},
+		{"first token", `{"active_requests": 1, "estimated_tokens_per_second": 0.0}`, "gpu · ctx 8192 · 1 running"},
+		{"generating", `{"active_requests": 1, "estimated_tokens_per_second": 41.7}`, "gpu · ctx 8192 · 1 running · 42 tok/s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/health":
+					io.WriteString(w, lemonadeOneModel)
+				case "/v1/stats":
+					io.WriteString(w, lemonadeStats+tt.live+"\n}")
+				}
+			}))
+			defer lem.Close()
+
+			rows, ok := New(nil, "", "", "", "", lem.URL, "").scanLemonade()
+			if !ok || len(rows) != 1 || rows[0].Note != tt.want {
+				t.Fatalf("got %+v ok=%v, want note %q", rows, ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestScanLemonadeLiveStatsNeedOneModel(t *testing.T) {
+	lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			io.WriteString(w, `{"all_models_loaded":[{"model_name":"a","device":"gpu"},{"model_name":"b","device":"npu"}]}`)
+		case "/v1/stats":
+			io.WriteString(w, lemonadeStats+`{"active_requests": 2, "estimated_tokens_per_second": 30.0}`+"\n}")
+		}
+	}))
+	defer lem.Close()
+
+	rows, ok := New(nil, "", "", "", "", lem.URL, "").scanLemonade()
+	if !ok || len(rows) != 2 {
+		t.Fatalf("expected both lemonade models: %+v ok=%v", rows, ok)
+	}
+	for _, r := range rows {
+		if strings.Contains(r.Note, "running") || strings.Contains(r.Note, "tok/s") {
+			t.Fatalf("server-wide live stats shouldn't land on one of two models: %+v", rows)
+		}
+	}
+}
+
+func TestScanLemonadeStats404(t *testing.T) {
+	lem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/health" {
+			io.WriteString(w, lemonadeOneModel)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer lem.Close()
+
+	rows, ok := New(nil, "", "", "", "", lem.URL, "").scanLemonade()
+	if !ok || len(rows) != 1 || rows[0].Note != "gpu · ctx 8192" {
+		t.Fatalf("an older lemonade without /v1/stats should keep today's note: %+v ok=%v", rows, ok)
+	}
+}
+
 func TestScanSglang(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
