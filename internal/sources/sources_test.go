@@ -208,6 +208,41 @@ func TestScanLlamacppRouterIdle(t *testing.T) {
 	}
 }
 
+func TestScanLlamacppNoKVGauge(t *testing.T) {
+	// current llama.cpp /metrics has no kv_cache_usage_ratio
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"model_path":"/models/a.gguf","default_generation_settings":{"n_ctx":4096}}`))
+		case "/metrics":
+			io.WriteString(w, "llamacpp:requests_processing 1\nllamacpp:n_tokens_max 4096\n")
+		}
+	}))
+	defer lcpp.Close()
+
+	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
+	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "1 running") || strings.Contains(rows[0].Note, "kv") {
+		t.Fatalf("want a running count and no kv without the gauge: %+v ok=%v", rows, ok)
+	}
+}
+
+func TestScanLlamacppOldKVGauge(t *testing.T) {
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"model_path":"/models/a.gguf","default_generation_settings":{"n_ctx":4096}}`))
+		case "/metrics":
+			io.WriteString(w, "llamacpp:kv_cache_usage_ratio 0.5\nllamacpp:requests_processing 1\n")
+		}
+	}))
+	defer lcpp.Close()
+
+	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
+	if !ok || len(rows) != 1 || !strings.Contains(rows[0].Note, "kv 50%") {
+		t.Fatalf("want kv%% from older builds that still send the gauge: %+v ok=%v", rows, ok)
+	}
+}
+
 func TestScanLMStudioV1(t *testing.T) {
 	lms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/models" {
