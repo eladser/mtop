@@ -243,6 +243,54 @@ func TestScanLlamacppOldKVGauge(t *testing.T) {
 	}
 }
 
+func llamacppNote(t *testing.T, metrics string) string {
+	t.Helper()
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"model_path":"/models/a.gguf","default_generation_settings":{"n_ctx":4096}}`))
+		case "/metrics":
+			io.WriteString(w, metrics)
+		}
+	}))
+	defer lcpp.Close()
+
+	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
+	if !ok || len(rows) != 1 {
+		t.Fatalf("want one llama.cpp row: %+v ok=%v", rows, ok)
+	}
+	return rows[0].Note
+}
+
+func TestScanLlamacppQueued(t *testing.T) {
+	note := llamacppNote(t, "llamacpp:requests_processing 2\nllamacpp:requests_deferred 3\n")
+	if note != "2 running · 3 queued" {
+		t.Fatalf("want queued after running: %q", note)
+	}
+	note = llamacppNote(t, "llamacpp:requests_processing 1\nllamacpp:requests_deferred 0\n")
+	if strings.Contains(note, "queued") {
+		t.Fatalf("nothing waiting, no queued: %q", note)
+	}
+}
+
+func TestScanLlamacppDraftAcceptance(t *testing.T) {
+	note := llamacppNote(t, "llamacpp:requests_processing 1\n"+
+		"llamacpp:spec_decode_num_draft_tokens_total 100\n"+
+		"llamacpp:spec_decode_num_accepted_tokens_total 71\n"+
+		`llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position="0"} 50`+"\n")
+	if note != "1 running · draft 71%" {
+		t.Fatalf("want draft acceptance: %q", note)
+	}
+	for _, m := range []string{
+		"llamacpp:requests_processing 1\nllamacpp:spec_decode_num_draft_tokens_total 0\nllamacpp:spec_decode_num_accepted_tokens_total 0\n",
+		"llamacpp:requests_processing 1\n",
+	} {
+		if note := llamacppNote(t, m); strings.Contains(note, "draft") {
+			t.Fatalf("no draft tokens, no draft: %q", note)
+		}
+	}
+}
+
 func TestScanLMStudioV1(t *testing.T) {
 	lms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/models" {

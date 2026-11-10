@@ -113,7 +113,7 @@ Ollama said it'd unload a model by a certain time and didn't. Press `u`, or set 
 The prompt filled 97% of the model's context window. Ollama quietly drops the oldest part of a prompt that doesn't fit, so from 90% up the model has probably lost the start of the conversation. `ctx over, rejected` means the server refused it outright. Raise the context size or send less.
 
 **llama.cpp shows up thinner than ollama.**
-Start it with `--metrics` for running requests, plus kv-cache use on builds that still report it. Without that flag it only hands out the model name.
+Start it with `--metrics` for running and queued requests, the share of draft tokens accepted when you run a draft model (`-md`), and kv-cache use on builds that still report it. Without that flag it only hands out the model name.
 
 **AMD? Intel? Mac?**
 On Linux, AMD works with `amd-smi` or `rocm-smi`. On Windows, AMD and Intel GPUs come from the system performance counters: util and memory, temp and power show `n/a`. Apple Silicon gives you the unified-memory figure on its own. GPU utilization there comes from `powermetrics`, which needs root, so run mtop with `sudo` on a Mac if you want that number too.
