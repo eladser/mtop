@@ -74,6 +74,26 @@ func TestNoteLine(t *testing.T) {
 	}
 }
 
+func TestModelsTitleFits(t *testing.T) {
+	a := &App{w: 100, h: 30, alive: []string{"ollama", "llama.cpp", "lm studio"}, disk: 12}
+	title := func() string { return strings.Split(stripANSI(a.modelsPane((a.w-6)/2)), "\n")[0] }
+	lineW := func() int { return (a.w-6)/2 - 4 }
+
+	if got := title(); len([]rune(got)) > lineW() || !strings.Contains(got, "ollama · llama.cpp · lm studio") {
+		t.Fatalf("title %q is wider than %d or lost the servers", got, lineW())
+	}
+
+	a.w = 80
+	if got := title(); len([]rune(got)) > lineW() || !strings.HasPrefix(got, "MODELS  ollama") || !strings.HasSuffix(got, "…") {
+		t.Fatalf("title %q should cut the server list to %d", got, lineW())
+	}
+
+	a.w = 160
+	if got, want := title(), "MODELS  ollama · llama.cpp · lm studio  12 on disk"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestControlBytesStripped(t *testing.T) {
 	name, note := "n\x1b[2J", "evil\x1b]52;c;AAAA\x07 end"
 	a := &App{w: 100, h: 40, rows: []sources.Row{{Name: name, From: "llama-swap", Note: note}}}

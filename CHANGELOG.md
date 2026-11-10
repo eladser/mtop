@@ -10,6 +10,7 @@
 - The llama.cpp row read `kv 0%` on current llama.cpp, which dropped the kv-cache gauge from `/metrics`. The kv figure only shows when the server reports it.
 - Notes too long for the TTL column (llama.cpp's `3 queued` and `draft 71%`, Lemonade's tok/s) were cut off with no way to see the rest. The selected model's full note now shows on a dim line under the table when its row cuts it.
 - Model names, notes, size and quant from a server, and model names in proxied requests, reached the terminal as sent, so an escape sequence in one could clear the screen, change the window title or write the clipboard. Control characters are dropped from them now.
+- With three servers up and models on disk, the models pane title wrapped onto a second line in a 100-column terminal and pushed the status line off screen. The title drops the disk count first, then cuts the server list, so it stays on one line.
 - Bubble Tea updated to v2.1.1 for GHSA-qc58-pfg9-7pph.
 - CI ran with the repo's default token permissions; it gets a read-only token now.
 - The data sources table in `docs/design.md` still listed LM Studio's v0 endpoint and llama.cpp's `/slots`, and had no llama-swap, Lemonade or SGLang rows.

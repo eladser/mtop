@@ -350,15 +350,29 @@ func (a *App) recordGPU() {
 
 func (a *App) modelsPane(w int) string {
 	var b strings.Builder
-	b.WriteString(titleSt.Render("MODELS"))
-	if len(a.alive) > 1 {
-		b.WriteString(dimSt.Render("  " + strings.Join(a.alive, " · ")))
-	}
-	if a.disk > 0 {
-		b.WriteString(dimSt.Render(fmt.Sprintf("  %d on disk", a.disk)))
-	}
 	// lines longer than the pane wrap and wreck the layout, so cut them
 	lineW := w - 4
+	var srv, disk string
+	if len(a.alive) > 1 {
+		srv = "  " + strings.Join(a.alive, " · ")
+	}
+	if a.disk > 0 {
+		disk = fmt.Sprintf("  %d on disk", a.disk)
+	}
+	// reqRows counts the title as one line: drop the disk count, then cut the servers
+	if n := lineW - len("MODELS"); len([]rune(srv+disk)) > n {
+		disk = ""
+		if srv = trunc(srv, n); n < 2 {
+			srv = ""
+		}
+	}
+	b.WriteString(titleSt.Render("MODELS"))
+	if srv != "" {
+		b.WriteString(dimSt.Render(srv))
+	}
+	if disk != "" {
+		b.WriteString(dimSt.Render(disk))
+	}
 	multi := len(a.alive) > 1
 	switch {
 	case a.ollErr != nil && len(a.rows) == 0:
