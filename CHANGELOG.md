@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.0 (2026-11-10)
+
+### Added
+- The Lemonade row shows running requests and tok/s from `/v1/stats` (v2026.43.3 and later). Lemonade reports them server-wide, so they only show with one model loaded.
+- The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
+
+### Fixed
+- The llama.cpp row read `kv 0%` on current llama.cpp, which dropped the kv-cache gauge from `/metrics`. The kv figure only shows when the server reports it.
+- Notes too long for the TTL column (llama.cpp's `3 queued` and `draft 71%`, Lemonade's tok/s) were cut off with no way to see the rest. The selected model's full note now shows on a dim line under the table when its row cuts it.
+- Bubble Tea updated to v2.1.1 for GHSA-qc58-pfg9-7pph.
+- CI ran with the repo's default token permissions; it gets a read-only token now.
+- The data sources table in `docs/design.md` still listed LM Studio's v0 endpoint and llama.cpp's `/slots`, and had no llama-swap, Lemonade or SGLang rows.
+
 ## 1.5.0 (2026-09-30)
 
 ### Added
