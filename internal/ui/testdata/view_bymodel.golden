@@ -2,10 +2,11 @@
 │ MODELS  ollama · lm studio  2 on disk         ││ GPU                                           │
 │   NAME                   VRAM  TTL          … ││ NVIDIA RTX 4090                               │
 │   qwen3:0.6b             1.0G  25m0s        … ││ util 62%  mem 18000/24576 MiB (73%)  71°C     │
-│ ▸ qwen3:32b              8.0G  cpu 38% · 4m1… ││ 320W                                          │
+│   qwen3:32b              8.0G  cpu 38% · 4m1… ││ 320W                                          │
 │   phi-4                   cpu  —            … ││ util ▅▅  mem ▅▆                               │
-╰───────────────────────────────────────────────╯│ models holding 9.0G of 24.0G                  │
-                                                 ╰───────────────────────────────────────────────╯
+│ ▸ Qwen3-8B-Q4_K_M.gguf      —  1 running · 3… ││ models holding 9.0G of 24.0G                  │
+│   1 running · 3 queued · draft 71%            │╰───────────────────────────────────────────────╯
+╰───────────────────────────────────────────────╯                                                 
 ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ BY MODEL                                                                                       │
 │ MODEL                        REQS  AVG TOK/S       P50       P95 TOKENS OUT                    │
