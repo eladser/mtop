@@ -74,6 +74,42 @@ func TestNoteLine(t *testing.T) {
 	}
 }
 
+func TestControlBytesStripped(t *testing.T) {
+	name, note := "n\x1b[2J", "evil\x1b]52;c;AAAA\x07 end"
+	a := &App{w: 100, h: 40, rows: []sources.Row{{Name: name, From: "llama-swap", Note: note}}}
+	out := stripANSI(a.modelsPane((a.w - 6) / 2))
+	lines := strings.Split(out, "\n")
+	if strings.ContainsAny(out, "\x1b\x07") || len(lines) != 4 || strings.TrimSpace(lines[3]) != "evil]52;c;AAAA end" {
+		t.Fatalf("models pane leaks control bytes or lost the note line:\n%q", out)
+	}
+	if a.rows[0].Name != name || a.rows[0].Note != note {
+		t.Fatal("the row should keep the server's raw strings")
+	}
+
+	store := proxy.NewStore(5)
+	store.Add(proxy.Request{When: time.Now(), Model: name})
+	a = &App{store: store, inspect: true, w: 100, h: 40}
+	for _, out := range []string{a.requestsPane(), a.byModelPane(), a.inspectorPane()} {
+		if out = stripANSI(out); strings.ContainsAny(out, "\x1b\x07") || !strings.Contains(out, "n[2J") {
+			t.Fatalf("model not cleaned in:\n%q", out)
+		}
+	}
+}
+
+func TestClean(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"qwen-中文 ünï", "qwen-中文 ünï"},
+		{"a\tb\nc\rd\x00e\x7ff", "abcdef"},
+		{"x\u009b2Jy\u0085z", "x2Jyz"},
+		{"bad\x9butf8", "bad�utf8"},
+	}
+	for _, tt := range tests {
+		if got := clean(tt.in); got != tt.want {
+			t.Fatalf("clean(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestPartialCPU(t *testing.T) {
 	tests := []struct {
 		cpu  int
