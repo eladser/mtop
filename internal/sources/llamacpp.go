@@ -6,8 +6,9 @@ import (
 )
 
 // llama.cpp server: /props has the loaded model, /metrics (needs
-// --metrics on launch) has how many requests are in flight right now,
-// plus kv-cache use on builds that still report it.
+// --metrics on launch) has how many requests are in flight and queued
+// right now, draft acceptance with a draft model, plus kv-cache use on
+// builds that still report it.
 func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 	if s.llamacpp == "" {
 		return nil, false
@@ -35,6 +36,14 @@ func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 	note := ""
 	if m, err := s.getProm(s.llamacpp + "/metrics"); err == nil {
 		note = fmt.Sprintf("%d running", int(m["llamacpp:requests_processing"]))
+		if v, ok := m["llamacpp:requests_deferred"]; ok && v > 0 {
+			note += fmt.Sprintf(" · %d queued", int(v))
+		}
+		// spec totals count from server start, so this is the lifetime rate.
+		// predicted_tokens_seconds stays unread, it reads 0 while a request is still generating
+		if d, ok := m["llamacpp:spec_decode_num_draft_tokens_total"]; ok && d > 0 {
+			note += fmt.Sprintf(" · draft %.0f%%", m["llamacpp:spec_decode_num_accepted_tokens_total"]/d*100)
+		}
 		// current llama.cpp dropped the kv gauge; missing isn't 0%
 		if v, ok := m["llamacpp:kv_cache_usage_ratio"]; ok {
 			note = fmt.Sprintf("kv %.0f%% · %s", v*100, note)
