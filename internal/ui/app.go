@@ -308,7 +308,7 @@ func (a *App) statusLine() string {
 		if !a.flashOk {
 			st = warnSt
 		}
-		return st.Render("  "+a.flash) + dimSt.Render(" ·"+help[2:])
+		return st.Render("  "+clean(a.flash)) + dimSt.Render(" ·"+help[2:])
 	}
 	return dimSt.Render(help)
 }
@@ -417,9 +417,9 @@ func (a *App) modelLine(r sources.Row, multi bool) string {
 	}
 	ttl := trunc(ttlFor(r), 18)
 	if multi {
-		return fmt.Sprintf("%-20s %6s  %-18s %-9s %6s", trunc(r.Name, 20), vram, ttl, r.From, r.Quant)
+		return fmt.Sprintf("%-20s %6s  %-18s %-9s %6s", trunc(clean(r.Name), 20), vram, ttl, r.From, clean(r.Quant))
 	}
-	return fmt.Sprintf("%-20s %6s  %-18s %8s %6s", trunc(r.Name, 20), vram, ttl, r.Size, r.Quant)
+	return fmt.Sprintf("%-20s %6s  %-18s %8s %6s", trunc(clean(r.Name), 20), vram, ttl, clean(r.Size), clean(r.Quant))
 }
 
 func ttlFor(r sources.Row) string {
@@ -427,7 +427,7 @@ func ttlFor(r sources.Row) string {
 	case overdue(r):
 		return "overdue, press u"
 	case r.Expires.IsZero() && r.Note != "":
-		return r.Note
+		return clean(r.Note)
 	case r.Expires.IsZero():
 		return "—"
 	}
@@ -444,6 +444,20 @@ func trunc(s string, w int) string {
 		return s
 	}
 	return string(r[:w-1]) + "…"
+}
+
+// clean drops C0 (tab and newline too, every cell is one line), DEL and
+// C1 from strings a server or client sent, so a model name can't move
+// the cursor, retitle the window or write the clipboard. Invalid utf-8
+// comes out as U+FFFD, so a lone 0x9b byte can't act as CSI either.
+func clean(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 0x20 && r != 0x7f && !(r >= 0x80 && r <= 0x9f) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func overdue(r sources.Row) bool {
@@ -597,7 +611,7 @@ func (a *App) requestsPane() string {
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("%-9s %-26s %10s %6s %8s  %s", "TIME", "MODEL", "TOK/S", "OUT", "PROMPT", "TOTAL")))
 	for _, r := range reqs {
 		b.WriteString(fmt.Sprintf("\n%-9s %-26s %10.1f %6d %8d  %s",
-			r.When.Format("15:04:05"), r.Model, r.TokSec, r.OutTk, r.PromptTk, r.Total.Round(10*time.Millisecond)))
+			r.When.Format("15:04:05"), clean(r.Model), r.TokSec, r.OutTk, r.PromptTk, r.Total.Round(10*time.Millisecond)))
 		if m := ctxMarker(r); m != "" {
 			b.WriteString("  " + warnSt.Render(m))
 		}
@@ -616,7 +630,7 @@ func (a *App) byModelPane() string {
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("%-26s %6s %10s %9s %9s %10s", "MODEL", "REQS", "AVG TOK/S", "P50", "P95", "TOKENS OUT")))
 	for _, m := range stats {
 		b.WriteString(fmt.Sprintf("\n%-26s %6d %10.1f %9.1f %9.1f %10d",
-			m.Model, m.Count, m.AvgTok, m.P50, m.P95, m.OutTk))
+			clean(m.Model), m.Count, m.AvgTok, m.P50, m.P95, m.OutTk))
 	}
 	return b.String()
 }
@@ -663,7 +677,7 @@ func (a *App) inspectorPane() string {
 		return b.String()
 	}
 	r := reqs[0]
-	b.WriteString(dimSt.Render("  " + r.When.Format("15:04:05") + " " + r.Model))
+	b.WriteString(dimSt.Render("  " + r.When.Format("15:04:05") + " " + clean(r.Model)))
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("load %s · prompt %s · %d→%d tok · %.1f tok/s",
 		r.Load.Round(time.Millisecond), r.PromptEval.Round(time.Millisecond), r.PromptTk, r.OutTk, r.TokSec)))
 	switch {
