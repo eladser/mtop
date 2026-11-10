@@ -49,6 +49,31 @@ func TestModelLine(t *testing.T) {
 	}
 }
 
+func TestNoteLine(t *testing.T) {
+	long := "1 running · 3 queued · draft 71%"
+	a := &App{w: 100, h: 40, rows: []sources.Row{{Name: "Qwen3-8B-Q4_K_M.gguf", From: "llama.cpp", Note: long}}}
+	pane := func() []string { return strings.Split(stripANSI(a.modelsPane((a.w-6)/2)), "\n") }
+
+	lines := pane()
+	if len(lines) != 4 || strings.TrimSpace(lines[3]) != long {
+		t.Fatalf("want the full note on its own line under the row, got:\n%s", strings.Join(lines, "\n"))
+	}
+	cut := a.reqRows()
+
+	a.rows[0].Note = "1 running"
+	if lines := pane(); len(lines) != 3 {
+		t.Fatalf("a note that fits shouldn't add a line, got:\n%s", strings.Join(lines, "\n"))
+	}
+	if got := a.reqRows(); got != cut+1 {
+		t.Fatalf("reqRows is %d with the note line and %d without, want one less", cut, got)
+	}
+
+	a.rows = nil
+	if lines := pane(); len(lines) != 2 {
+		t.Fatalf("no rows shouldn't add a line, got:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
 func TestPartialCPU(t *testing.T) {
 	tests := []struct {
 		cpu  int

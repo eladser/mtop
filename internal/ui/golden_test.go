@@ -24,15 +24,18 @@ var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
-// fixedApp builds a deterministic App: a few models across two sources
-// (one fully offloaded, one partial-offload, one CPU-only), one GPU with
-// a two-sample history so the sparkline renders, and a handful of
-// requests including a heuristic ctx marker and a confirmed overflow.
+// fixedApp builds a deterministic App: a few models across three sources
+// (one fully offloaded, one partial-offload, one CPU-only, one llama.cpp
+// row whose note is too long for its line), one GPU with a two-sample
+// history so the sparkline renders, and a handful of requests including
+// a heuristic ctx marker and a confirmed overflow. The selected row is
+// the llama.cpp one: its full note line has no countdown in it.
 func fixedApp() *App {
 	rows := []sources.Row{
 		{Name: "qwen3:0.6b", From: "ollama", Size: "0.6b", Quant: "Q4_K_M", VRAM: 1 << 30, Ctx: 4096, Expires: time.Now().Add(25 * time.Minute)},
 		{Name: "qwen3:32b", From: "ollama", Size: "32b", Quant: "Q4_K_M", VRAM: 8 << 30, CPU: 38, Ctx: 4096, Expires: time.Now().Add(4*time.Minute + 12*time.Second)},
 		{Name: "phi-4", From: "lm studio", Size: "14b", Quant: "Q8_0", VRAM: 0, CPU: 100},
+		{Name: "Qwen3-8B-Q4_K_M.gguf", From: "llama.cpp", Size: "32k ctx", Ctx: 32768, Note: "1 running · 3 queued · draft 71%"},
 	}
 
 	store := proxy.NewStore(256)
@@ -57,7 +60,7 @@ func fixedApp() *App {
 		tempAlert: 87,
 		w:         100,
 		h:         30,
-		sel:       1,
+		sel:       3,
 		alive:     []string{"ollama", "lm studio"},
 		disk:      2,
 		rows:      rows,

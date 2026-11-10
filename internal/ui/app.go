@@ -284,7 +284,11 @@ func (a *App) View() tea.View {
 
 // how many request rows fit without pushing the status line off screen
 func (a *App) reqRows() int {
-	topLines := max(len(a.rows)+2, len(a.gpus)*2+1) // header+rows vs name+stats per gpu
+	models := len(a.rows) + 2
+	if a.noteLine((a.w-6)/2-4) != "" {
+		models++
+	}
+	topLines := max(models, len(a.gpus)*2+1) // header+rows vs name+stats per gpu
 	free := a.h - topLines - 13
 	return min(max(free, 4), 30)
 }
@@ -380,8 +384,25 @@ func (a *App) modelsPane(w int) string {
 				b.WriteString("\n  " + line)
 			}
 		}
+		if n := a.noteLine(lineW); n != "" {
+			b.WriteString("\n" + dimSt.Render("  "+trunc(n, lineW)))
+		}
 	}
 	return b.String()
+}
+
+// noteLine is the selected row's whole ttl text when its line in the
+// models pane cuts it, so live numbers like "draft 71%" still show.
+// Empty when it fits.
+func (a *App) noteLine(lineW int) string {
+	if a.sel >= len(a.rows) {
+		return ""
+	}
+	r := a.rows[a.sel]
+	if t := ttlFor(r); !strings.Contains(trunc(a.modelLine(r, len(a.alive) > 1), lineW), t) {
+		return t
+	}
+	return ""
 }
 
 // modelLine is plain text; styling happens per whole row so truncation
