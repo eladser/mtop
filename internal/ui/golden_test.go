@@ -53,6 +53,7 @@ func fixedApp() *App {
 
 	a := &App{
 		gpu:       gpu.New(),
+		now:       time.Now,
 		store:     store,
 		listen:    "127.0.0.1:4321",
 		version:   "test",

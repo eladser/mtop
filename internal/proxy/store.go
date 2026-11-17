@@ -72,6 +72,9 @@ type Store struct {
 	max      int
 	err      error
 	onAdd    func(Request)
+	flights  map[uint64]*Live
+	nextID   uint64
+	now      func() time.Time // test hook, nil means time.Now
 }
 
 func NewStore(max int) *Store {
@@ -80,6 +83,15 @@ func NewStore(max int) *Store {
 
 func (s *Store) Add(r Request) {
 	s.mu.Lock()
+	fn := s.addLocked(r)
+	s.mu.Unlock()
+	if fn != nil {
+		fn(r)
+	}
+}
+
+// addLocked records r and returns the onAdd hook to call after unlocking.
+func (s *Store) addLocked(r Request) func(Request) {
 	s.reqs = append([]Request{r}, s.reqs...)
 	if len(s.reqs) > s.max {
 		s.reqs = s.reqs[:s.max]
@@ -87,11 +99,7 @@ func (s *Store) Add(r Request) {
 	if r.Overflowed() {
 		s.overflow[r.Model]++
 	}
-	fn := s.onAdd
-	s.mu.Unlock()
-	if fn != nil {
-		fn(r)
-	}
+	return s.onAdd
 }
 
 // Preload drops in requests recovered from disk on startup. reqs is

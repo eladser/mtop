@@ -17,7 +17,15 @@ type Stats struct {
 	MemTotal int     // MiB
 	Temp     int     // celsius
 	Power    float64 // watts
+	Throttle uint8   // Throttle* bits, NVIDIA only, 0 when none or unknown
 }
+
+// Stats.Throttle bits: nvidia-smi hw_thermal_slowdown, hw_power_brake_slowdown, hw_slowdown.
+const (
+	ThrottleThermal uint8 = 1 << iota
+	ThrottlePower
+	ThrottleHW
+)
 
 type Reader struct {
 	nvidia string

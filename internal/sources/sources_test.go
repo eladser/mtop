@@ -654,3 +654,147 @@ func TestScanDeadSources(t *testing.T) {
 		t.Fatalf("nothing should be found: %v %v", rows, alive)
 	}
 }
+
+func TestScanLlamacppSingleFields(t *testing.T) {
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"role":"model","model_path":"/models/a.gguf","model_alias":"my-a","total_slots":4,"default_generation_settings":{"n_ctx":8192}}`))
+		case "/metrics":
+			w.Write([]byte("llamacpp:requests_processing 2\nllamacpp:requests_deferred 3\n"))
+		}
+	}))
+	defer lcpp.Close()
+
+	rows, _, _ := New(nil, lcpp.URL, "", "", "", "", "").Scan()
+	if len(rows) != 1 {
+		t.Fatalf("got rows=%+v", rows)
+	}
+	r := rows[0]
+	if r.Slots != 4 || r.Busy != 2 || r.Queued != 3 || r.Alias != "my-a" {
+		t.Fatalf("bad fields: %+v", r)
+	}
+	if want := strings.TrimPrefix(lcpp.URL, "http://"); r.Base != want {
+		t.Fatalf("base %q, want %q", r.Base, want)
+	}
+	if r.Note != "2 running · 3 queued" {
+		t.Fatalf("note changed: %q", r.Note)
+	}
+}
+
+func TestScanLlamacppRouterPerModel(t *testing.T) {
+	var probed []string
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" && r.URL.Path != "/props" && r.URL.Path != "/metrics" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.URL.Path == "/models" {
+			w.Write([]byte(`{"data":[
+				{"id":"org/a:Q4","aliases":["a-short"],"path":"/models/a.gguf","status":{"value":"loaded"}},
+				{"id":"b","path":"/models/b.gguf","status":{"value":"unloaded"}}
+			]}`))
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("model") == "" {
+			if r.URL.Path == "/props" {
+				w.Write([]byte(`{"role":"router","model_path":"none","model_alias":"llama-server","default_generation_settings":{"n_ctx":0}}`))
+				return
+			}
+			http.Error(w, "model name is missing", 400)
+			return
+		}
+		probed = append(probed, r.URL.Path+"?"+r.URL.RawQuery)
+		if q.Get("model") != "org/a:Q4" || q.Get("autoload") != "false" {
+			t.Errorf("bad probe: %s", r.URL.String())
+			http.Error(w, "no", 400)
+			return
+		}
+		if r.URL.Path == "/props" {
+			w.Write([]byte(`{"role":"model","total_slots":2,"model_alias":"a-alias","default_generation_settings":{"n_ctx":16384}}`))
+			return
+		}
+		w.Write([]byte("llamacpp:requests_processing 1\nllamacpp:requests_deferred 2\n"))
+	}))
+	defer lcpp.Close()
+
+	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
+	if !ok || len(rows) != 1 {
+		t.Fatalf("got ok=%v rows=%+v", ok, rows)
+	}
+	r := rows[0]
+	if r.Slots != 2 || r.Ctx != 16384 || r.Busy != 1 || r.Queued != 2 || r.Alias != "a-alias" {
+		t.Fatalf("bad fields: %+v", r)
+	}
+	if r.Note != "1 running · 2 queued" {
+		t.Fatalf("note: %q", r.Note)
+	}
+	if strings.Join(r.Aliases, ",") != "a-short,org/a:Q4" {
+		t.Fatalf("aliases: %v", r.Aliases)
+	}
+	if len(probed) != 2 {
+		t.Fatalf("want one props and one metrics probe, got %v", probed)
+	}
+}
+
+func TestScanVllmBusyQueued(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`vllm:num_requests_running{model_name="m"} 3
+vllm:num_requests_waiting{model_name="m"} 5
+`))
+	}))
+	defer srv.Close()
+	rows, ok := New(nil, "", "", srv.URL, "", "", "").scanVllm()
+	if !ok || len(rows) != 1 || rows[0].Busy != 3 || rows[0].Queued != 5 || rows[0].Slots != 0 {
+		t.Fatalf("got ok=%v rows=%+v", ok, rows)
+	}
+}
+
+func TestScanSglangBusyQueued(t *testing.T) {
+	for _, sep := range []string{":", "_"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/get_model_info" {
+				w.Write([]byte(`{"model_path":"/m/x"}`))
+				return
+			}
+			w.Write([]byte("sglang" + sep + "num_running_reqs 2\nsglang" + sep + "num_queue_reqs 4\n"))
+		}))
+		rows, ok := New(nil, "", "", "", "", "", srv.URL).scanSglang()
+		srv.Close()
+		if !ok || len(rows) != 1 || rows[0].Busy != 2 || rows[0].Queued != 4 {
+			t.Fatalf("sep %q: ok=%v rows=%+v", sep, ok, rows)
+		}
+	}
+}
+
+func TestScanBaseOnEveryRow(t *testing.T) {
+	oll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"models":[{"name":"qwen3:0.6b","size_vram":1000}]}`))
+	}))
+	defer oll.Close()
+	lms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"models":[{"key":"k","loaded_instances":[{"id":"phi"}]}]}`))
+	}))
+	defer lms.Close()
+	s := New([]*ollama.Client{ollama.New(oll.URL)}, "", lms.URL, "", "", "", "")
+	rows, _, _ := s.Scan()
+	if len(rows) != 2 {
+		t.Fatalf("rows: %+v", rows)
+	}
+	if rows[0].Base != strings.TrimPrefix(oll.URL, "http://") || rows[1].Base != strings.TrimPrefix(lms.URL, "http://") {
+		t.Fatalf("bases: %q %q", rows[0].Base, rows[1].Base)
+	}
+}
+
+func TestHostPort(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://127.0.0.1:11434":   "127.0.0.1:11434",
+		"http://localhost:8080/v1": "localhost:8080",
+		"localhost:1234":           "localhost:1234",
+		"127.0.0.1:30000":          "127.0.0.1:30000",
+	} {
+		if got := HostPort(in); got != want {
+			t.Errorf("HostPort(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -24,6 +24,12 @@ type Row struct {
 	Expires time.Time
 	From    string
 	Note    string       // extra per-server detail, e.g. kv-cache use
+	Slots   int          // parallel slots the server reports, 0 if unknown
+	Busy    int          // requests running on the server right now
+	Queued  int          // requests waiting on the server
+	Alias   string       // name the server calls itself (llama.cpp model_alias)
+	Aliases []string     // every name a client may send for this model (llama.cpp router)
+	Base    string       // host:port of the server, for matching proxy traffic
 	Unload  func() error // nil when the server has no way to
 }
 
@@ -84,6 +90,7 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 				Ctx:     m.ContextLength,
 				Expires: m.ExpiresAt,
 				From:    from,
+				Base:    HostPort(oll.Host()),
 				Unload:  func() error { return oll.Unload(m.Name) },
 			})
 		}
@@ -102,28 +109,32 @@ func (s *Scanner) Scan() (rows []Row, alive []string, ollErr error) {
 	if !swapOnLlamacppURL {
 		if r, ok := s.scanLlamacpp(); ok {
 			alive = append(alive, "llama.cpp")
-			rows = append(rows, r...)
+			rows = append(rows, withBase(r, s.llamacpp)...)
 		}
 	}
 	if r, ok := s.scanLMStudio(); ok {
 		alive = append(alive, "lm studio")
-		rows = append(rows, r...)
+		rows = append(rows, withBase(r, s.lmstudio)...)
 	}
 	if r, ok := s.scanVllm(); ok {
 		alive = append(alive, "vllm")
-		rows = append(rows, r...)
+		rows = append(rows, withBase(r, s.vllm)...)
 	}
 	if swapOK {
 		alive = append(alive, "llama-swap")
-		rows = append(rows, swapRows...)
+		swapBase := s.llamaswap
+		if swapBase == "" {
+			swapBase = s.llamacpp
+		}
+		rows = append(rows, withBase(swapRows, swapBase)...)
 	}
 	if r, ok := s.scanLemonade(); ok {
 		alive = append(alive, "lemonade")
-		rows = append(rows, r...)
+		rows = append(rows, withBase(r, s.lemonade)...)
 	}
 	if r, ok := s.scanSglang(); ok {
 		alive = append(alive, "sglang")
-		rows = append(rows, r...)
+		rows = append(rows, withBase(r, s.sglang)...)
 	}
 	return rows, alive, ollErr
 }
@@ -165,4 +176,12 @@ func (s *Scanner) postJSON(url string, body any) error {
 		return fmt.Errorf("%s: %s", url, resp.Status)
 	}
 	return nil
+}
+
+func withBase(rows []Row, base string) []Row {
+	hp := HostPort(base)
+	for i := range rows {
+		rows[i].Base = hp
+	}
+	return rows
 }
