@@ -229,3 +229,16 @@ func BenchmarkViewLive(b *testing.B) {
 		a.View()
 	}
 }
+
+func TestLiveClock(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		3200 * time.Millisecond: "3.2s",
+		41 * time.Second:        "41.0s",
+		125 * time.Second:       "2m05s",
+		-time.Second:            "0.0s",
+	} {
+		if got := liveClock(d); got != want {
+			t.Errorf("%v: %q, want %q", d, got, want)
+		}
+	}
+}
