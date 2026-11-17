@@ -65,7 +65,7 @@ func TestStateQueue(t *testing.T) {
 		{27, 0, 0, "0 running · draft 71%"},
 		{28.5, 2, 0, "2 running · draft 71%"},
 		{30, 2, 2, "2 running · 2 queued · draft 71%"},
-		{33, 2, 2, "2 running · 2 queued · draft 71%"},
+		{34, 2, 2, "2 running · 2 queued · draft 71%"},
 		{36, 2, 0, "2 running · draft 71%"},
 		{39.9, 0, 0, "0 running · draft 71%"},
 	}

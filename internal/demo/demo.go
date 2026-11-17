@@ -66,13 +66,13 @@ var script = []req{
 	{model: "qwen3:0.6b", path: ollamaChat, at: 21 * time.Second, ttft: 150 * time.Millisecond, rate: 95, toks: 50, prompt: 55,
 		text: [3]string{"Translate to French: the build is green again.", "", "Le build est de nouveau au vert."}},
 	// four on two slots: the last two wait for a slot, hence the long ttft
-	{model: llamaModel, path: openaiChat, at: 28 * time.Second, ttft: 500 * time.Millisecond, rate: 40, toks: 200, prompt: 900,
+	{model: llamaModel, path: openaiChat, at: 28 * time.Second, ttft: 500 * time.Millisecond, rate: 40, toks: 260, prompt: 900,
 		text: [3]string{"Draft release notes for a patch that fixes a crash on empty config files.", "Short notes, one bullet per change, no marketing.", "- Fixed a crash when the config file exists but is empty.\n- An empty file now behaves like a missing one."}},
-	{model: llamaModel, path: openaiChat, at: 28400 * time.Millisecond, ttft: 500 * time.Millisecond, rate: 40, toks: 200, prompt: 880,
+	{model: llamaModel, path: openaiChat, at: 28400 * time.Millisecond, ttft: 500 * time.Millisecond, rate: 40, toks: 260, prompt: 880,
 		text: [3]string{"List three ways to cut the cold-start time of a Go CLI.", "", "1. Avoid init() work.\n2. Lazy-load big tables.\n3. Skip reflection-heavy libraries."}},
-	{model: llamaModel, path: openaiChat, at: 28800 * time.Millisecond, ttft: 4700 * time.Millisecond, rate: 40, toks: 200, prompt: 910,
+	{model: llamaModel, path: openaiChat, at: 28800 * time.Millisecond, ttft: 6200 * time.Millisecond, rate: 40, toks: 140, prompt: 910,
 		text: [3]string{"Write a SQL query for the ten most recent orders per customer.", "", "SELECT * FROM (SELECT o.*, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC) rn FROM orders o) t WHERE rn <= 10;"}},
-	{model: llamaModel, path: openaiChat, at: 29200 * time.Millisecond, ttft: 4700 * time.Millisecond, rate: 40, toks: 200, prompt: 870,
+	{model: llamaModel, path: openaiChat, at: 29200 * time.Millisecond, ttft: 6200 * time.Millisecond, rate: 40, toks: 140, prompt: 870,
 		text: [3]string{"Shorten this sentence: we are in the process of migrating.", "", "We're migrating."}},
 }
 
@@ -332,7 +332,7 @@ func finished(r req, end time.Duration, base time.Time) proxy.Request {
 		When: base.Add(end), Path: r.path, Model: r.model,
 		PromptTk: r.prompt, OutTk: r.toks,
 		TokSec: float64(r.toks) / (end - r.decodeStart()).Seconds(),
-		Total:  end - r.at, PromptEval: r.ttft, Ctx: ctx,
+		Total:  end - r.at, PromptEval: r.ttft, TTFT: r.ttft, Ctx: ctx,
 		Prompt: r.text[0], Thinking: r.text[1], Completion: r.text[2],
 	}
 }

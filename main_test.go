@@ -109,7 +109,7 @@ func TestDemoOpensNoListener(t *testing.T) {
 
 	app, _, store := newDemo()
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	app.Update(app.Init()())
+	app.Update(app.Init()().(tea.BatchMsg)[0]())
 	out := stripANSI(app.View().Content)
 
 	if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
