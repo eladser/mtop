@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/eladser/mtop/internal/proxy"
 	"github.com/eladser/mtop/internal/sources"
 )
@@ -202,5 +204,78 @@ func TestSetTargetAndClock(t *testing.T) {
 	a.SetDemo()
 	if !a.demo {
 		t.Fatal("SetDemo")
+	}
+}
+
+func TestInspectorStripsEscapes(t *testing.T) {
+	evil := "a\x1b[2Jb\x1b]52;c;AAAA\x07c\x1b]0;title\x07d\re\tf\r\ng\x9b2J"
+	store := proxy.NewStore(5)
+	store.Add(proxy.Request{When: time.Now(), Model: "m", Prompt: evil, Thinking: evil, Completion: evil})
+	a := &App{store: store, inspect: true, w: 100, h: 40}
+	out := a.inspectorPane()
+	for _, bad := range []string{"\x1b[2J", "\x1b]", "\x07", "\r", "\t", "\x9b"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("inspector leaks %q:\n%q", bad, out)
+		}
+	}
+	if !strings.Contains(stripANSI(out), "de    f") {
+		t.Fatalf("tab should become spaces:\n%q", stripANSI(out))
+	}
+}
+
+func TestLongModelFitsTerminal(t *testing.T) {
+	t.Setenv("MTOP_GPU", "apple")
+	long := strings.Repeat("hf.co/some-org/Some-Model-GGUF-", 2)[:60]
+	view := func(model string, w int, by bool) []string {
+		store := proxy.NewStore(5)
+		store.Add(proxy.Request{When: time.Now(), Model: model, OutTk: 5, TokSec: 3})
+		a := fixedApp()
+		a.store, a.w, a.byModel = store, w, by
+		return strings.Split(stripANSI(a.View().Content), "\n")
+	}
+	for _, w := range []int{80, 100} {
+		for _, by := range []bool{false, true} {
+			lines := view(long, w, by)
+			for _, l := range lines {
+				if n := lipgloss.Width(strings.TrimRight(l, " ")); n > w {
+					t.Fatalf("w=%d byModel=%v: line is %d wide: %q", w, by, n, l)
+				}
+			}
+			if !strings.Contains(lines[len(lines)-1], "quit") {
+				t.Fatalf("w=%d byModel=%v: status line not last: %q", w, by, lines[len(lines)-1])
+			}
+			if n := len(view("short", w, by)); len(lines) != n {
+				t.Fatalf("w=%d byModel=%v: long name made the view %d lines, short one is %d", w, by, len(lines), n)
+			}
+		}
+	}
+}
+
+func TestStatusLineWidth(t *testing.T) {
+	long := strings.Repeat("unloaded some-very-long-model-name ", 4)
+	for _, w := range []int{80, 100} {
+		for _, tt := range []struct {
+			name string
+			set  func(a *App)
+		}{
+			{"normal", func(a *App) {}},
+			{"normal by model", func(a *App) { a.byModel = true }},
+			{"flash", func(a *App) { a.flash, a.flashAt, a.flashOk = "unloaded qwen3:32b", time.Now(), true }},
+			{"long flash", func(a *App) { a.flash, a.flashAt = long, time.Now() }},
+			{"alert", func(a *App) { a.memAlert = 50 }},
+			{"demo", func(a *App) { a.demo = true }},
+			{"demo flash", func(a *App) { a.demo, a.flash, a.flashAt, a.flashOk = true, "unloaded qwen3:32b", time.Now(), true }},
+		} {
+			a := fixedApp()
+			a.w, a.version, a.listen = w, "1.6.0", "127.0.0.1:4321"
+			tt.set(a)
+			out := a.statusLine()
+			if n := lipgloss.Width(out); n > w {
+				t.Errorf("%s at %d cols: %d wide: %q", tt.name, w, n, stripANSI(out))
+			}
+			if !strings.Contains(stripANSI(out), "quit") && tt.name != "alert" && tt.name != "long flash" {
+				t.Errorf("%s at %d cols lost the quit hint: %q", tt.name, w, stripANSI(out))
+			}
+		}
 	}
 }

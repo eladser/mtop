@@ -30,13 +30,14 @@ func TestMatchRow(t *testing.T) {
 		{"latest suffix", "127.0.0.1:11434", "llama3", 1},
 		{"alias", "127.0.0.1:8080", "my-alias", 3},
 		{"aliases list", "127.0.0.1:8080", "short", 3},
-		{"single candidate", "127.0.0.1:8000", "whatever-the-client-sent", 5},
+		{"single candidate, unknown name", "127.0.0.1:8000", "whatever-the-client-sent", -1},
 		{"two candidates, unknown name", "127.0.0.1:11434", "mystery", -1},
 		{"two llama.cpp candidates, unknown name", "127.0.0.1:8080", "mystery", -1},
 		{"model on another server", "127.0.0.1:11434", "phi-4", -1},
 		{"target mismatch", "127.0.0.1:9999", "qwen3:0.6b", -1},
 		{"no target", "", "qwen3:0.6b", -1},
-		{"empty model", "127.0.0.1:8000", "", -1},
+		{"empty model, single candidate", "127.0.0.1:8000", "", 5},
+		{"empty model, two candidates", "127.0.0.1:11434", "", -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -215,5 +216,27 @@ func TestJudge(t *testing.T) {
 	a.judge()
 	if a.throttleText(0) != "hw thermal slowdown" {
 		t.Error("throttle should show on the third poll")
+	}
+}
+
+func TestMatchRowSwappedModel(t *testing.T) {
+	// A overflowed, ollama swapped to B: only B is loaded, A's request must not land on it
+	a := &App{rows: []sources.Row{{Name: "b:latest", From: "ollama", Base: "127.0.0.1:11434"}}}
+	a.SetTarget("127.0.0.1:11434")
+	if got := a.matchRow("a:latest"); got != -1 {
+		t.Fatalf("matched swapped-out model to row %d", got)
+	}
+}
+
+func TestJudgeUsesRowCtxForAlias(t *testing.T) {
+	store := proxy.NewStore(10)
+	store.Add(proxy.Request{Model: "llama3.1", When: time.Now(), PromptTk: 4096, Overflow: true})
+	a := &App{store: store, rows: []sources.Row{{Name: "llama3.1:latest", From: "ollama", Base: "127.0.0.1:11434", Ctx: 4096}}}
+	// session started before the request, or the rules skip it as history
+	a.start = time.Now().Add(-time.Minute)
+	a.SetTarget("127.0.0.1:11434")
+	a.judge()
+	if _, ok := a.verdicts["ollama|llama3.1:latest"]; !ok {
+		t.Fatalf("no verdict for an alias client: %+v", a.verdicts)
 	}
 }

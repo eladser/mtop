@@ -1,9 +1,12 @@
 package gpu
 
 import (
+	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 const nvBase = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw"
@@ -17,9 +20,20 @@ var nvQueries = []string{
 	nvBase,
 }
 
+// errFieldRejected is nvidia-smi's exit 2: the driver doesn't know a
+// queried field.
+var errFieldRejected = errors.New("nvidia-smi: field rejected")
+
 // runSMI is swapped out in tests.
 var runSMI = func(path string, args ...string) ([]byte, error) {
-	return exec.Command(path, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, args...).Output()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 2 {
+		return nil, errFieldRejected
+	}
+	return out, err
 }
 
 // smiLadder remembers which query the driver accepted so later polls
@@ -44,6 +58,11 @@ func readNvidia(l *smiLadder, path string) ([]Stats, error) {
 		if err == nil {
 			l.decided, l.step = true, i
 			return parse(string(out)), nil
+		}
+		// a timeout or crash says nothing about the fields, so don't
+		// settle on a lower rung because of it
+		if !errors.Is(err, errFieldRejected) {
+			return nil, err
 		}
 	}
 	return nil, err

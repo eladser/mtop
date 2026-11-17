@@ -329,30 +329,57 @@ func (a *App) clock() time.Time {
 }
 
 func (a *App) statusLine() string {
+	if a.w == 0 {
+		return a.statusText()
+	}
+	return lipgloss.NewStyle().MaxWidth(a.w).Render(a.statusText())
+}
+
+// fit is the first of tiers that leaves room for used columns, else the
+// last (the quit hint), which MaxWidth then cuts if even that is too wide.
+func (a *App) fit(used int, tiers ...string) string {
+	for _, t := range tiers {
+		if a.w == 0 || used+lipgloss.Width(t) <= a.w {
+			return t
+		}
+	}
+	return tiers[len(tiers)-1]
+}
+
+func (a *App) statusText() string {
 	if alert := a.gpuAlert(); alert != "" {
 		return warnSt.Render("  " + alert)
 	}
 	flashing := a.flash != "" && time.Since(a.flashAt) < 12*time.Second
 	if a.demo && !flashing {
-		return demoSt.Render("  " + demoHelp)
+		return demoSt.Render("  " + a.fit(2, demoHelp, demoShort, "q quit"))
 	}
 	proxy := "proxy off"
 	if a.listen != "" {
 		proxy = "proxy on " + a.listen
 	}
-	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · i inspect · q quit · %s · v%s",
-		map[bool]string{true: "requests", false: "by model"}[a.byModel], proxy, a.version)
+	view := map[bool]string{true: "requests", false: "by model"}[a.byModel]
+	help := func(used int) string {
+		return a.fit(used,
+			fmt.Sprintf("↑/↓ select · u unload · c %s · i inspect · q quit · %s · v%s", view, proxy, a.version),
+			fmt.Sprintf("↑/↓ select · u unload · c %s · i inspect · q quit · %s", view, proxy),
+			fmt.Sprintf("↑/↓ select · u unload · c %s · i inspect · q quit", view),
+			"u unload · c "+view+" · q quit",
+			"q quit")
+	}
 	if flashing {
 		st := selSt
 		if !a.flashOk {
 			st = warnSt
 		}
+		msg := "  " + clean(a.flash)
+		used := lipgloss.Width(msg) + 3
 		if a.demo {
-			return st.Render("  "+clean(a.flash)) + demoSt.Render(" · "+demoHelp)
+			return st.Render(msg) + demoSt.Render(" · "+a.fit(used, demoHelp, demoShort, "q quit"))
 		}
-		return st.Render("  "+clean(a.flash)) + dimSt.Render(" ·"+help[2:])
+		return st.Render(msg) + dimSt.Render(" · "+help(used))
 	}
-	return dimSt.Render(help)
+	return dimSt.Render("  " + help(2))
 }
 
 func (a *App) gpuAlert() string {
@@ -685,7 +712,7 @@ func (a *App) requestsPane() string {
 	}
 	for _, r := range reqs {
 		b.WriteString(fmt.Sprintf("\n%-9s %-26s %10.1f %6d %8d  %s",
-			r.When.Format("15:04:05"), clean(r.Model), r.TokSec, r.OutTk, r.PromptTk, r.Total.Round(10*time.Millisecond)))
+			r.When.Format("15:04:05"), trunc(clean(r.Model), 26), r.TokSec, r.OutTk, r.PromptTk, r.Total.Round(10*time.Millisecond)))
 		if m := ctxMarker(r); m != "" {
 			b.WriteString("  " + warnSt.Render(m))
 		}
@@ -704,7 +731,7 @@ func (a *App) byModelPane() string {
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("%-26s %6s %10s %9s %9s %10s", "MODEL", "REQS", "AVG TOK/S", "P50", "P95", "TOKENS OUT")))
 	for _, m := range stats {
 		b.WriteString(fmt.Sprintf("\n%-26s %6d %10.1f %9.1f %9.1f %10d",
-			clean(m.Model), m.Count, m.AvgTok, m.P50, m.P95, m.OutTk))
+			trunc(clean(m.Model), 26), m.Count, m.AvgTok, m.P50, m.P95, m.OutTk))
 	}
 	return b.String()
 }
@@ -792,7 +819,7 @@ func wrap(s string, width int) string {
 	}
 	var out []string
 	for _, line := range strings.Split(s, "\n") {
-		r := []rune(line) // slice runes, not bytes, so we don't cut a utf-8 char
+		r := []rune(clean(strings.ReplaceAll(line, "\t", "    "))) // slice runes, not bytes, so we don't cut a utf-8 char
 		for len(r) > width {
 			out = append(out, string(r[:width]))
 			r = r[width:]

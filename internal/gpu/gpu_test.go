@@ -112,7 +112,7 @@ func TestNvidiaLadder(t *testing.T) {
 			case !strings.Contains(q, "clocks_") && accept == "base":
 				return []byte(base + "\n"), nil
 			}
-			return nil, errors.New("exit status 2")
+			return nil, errFieldRejected
 		}
 		return
 	}
@@ -229,5 +229,30 @@ func TestDebounceBitsAndCount(t *testing.T) {
 	}
 	if got := d.Update(both[:1]); len(got) != 1 {
 		t.Fatalf("gpu count change: %v", got)
+	}
+}
+
+func TestNvidiaLadderTransientError(t *testing.T) {
+	old := runSMI
+	defer func() { runSMI = old }()
+	calls, fail := 0, true
+	runSMI = func(path string, args ...string) ([]byte, error) {
+		calls++
+		if fail {
+			return nil, errors.New("signal: killed")
+		}
+		return []byte("RTX 4090, 35, 100, 200, 60, 90.0, Active, Not Active, Not Active\n"), nil
+	}
+	var l smiLadder
+	if _, err := readNvidia(&l, "smi"); err == nil {
+		t.Fatal("want the error")
+	}
+	if calls != 1 || l.decided {
+		t.Fatalf("a timeout must stop the ladder undecided: calls=%d decided=%v", calls, l.decided)
+	}
+	fail = false
+	g, err := readNvidia(&l, "smi")
+	if err != nil || len(g) != 1 || g[0].Throttle != ThrottleThermal || l.step != 0 {
+		t.Fatalf("next poll should land on the top rung: %+v %v step=%d", g, err, l.step)
 	}
 }

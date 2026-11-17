@@ -50,10 +50,10 @@ func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 }
 
 // llamacppMetrics fills Note, Busy and Queued from one /metrics scrape.
-func (s *Scanner) llamacppMetrics(row *Row, u string) {
+func (s *Scanner) llamacppMetrics(row *Row, u string) bool {
 	m, err := s.getProm(u)
 	if err != nil {
-		return
+		return false
 	}
 	row.Busy = int(m["llamacpp:requests_processing"])
 	note := fmt.Sprintf("%d running", row.Busy)
@@ -71,6 +71,30 @@ func (s *Scanner) llamacppMetrics(row *Row, u string) {
 		note = fmt.Sprintf("kv %.0f%% · %s", v*100, note)
 	}
 	row.Note = note
+	return true
+}
+
+// routerMetrics is llamacppMetrics for one router child, which can be
+// slow to answer while it is busy. The last good reading stays up until
+// three scrapes in a row fail, so the note does not blink empty.
+func (s *Scanner) routerMetrics(row *Row, id, u string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.probes == nil {
+		s.probes = map[string]*probe{}
+	}
+	p := s.probes[id]
+	if p == nil {
+		p = &probe{}
+		s.probes[id] = p
+	}
+	if s.llamacppMetrics(row, u) {
+		p.note, p.busy, p.queued, p.fails = row.Note, row.Busy, row.Queued, 0
+		return
+	}
+	if p.fails++; p.fails < 3 {
+		row.Note, row.Busy, row.Queued = p.note, p.busy, p.queued
+	}
 }
 
 // scanLlamacppRouter lists models from /models, which the router exposes
@@ -116,7 +140,7 @@ func (s *Scanner) scanLlamacppRouter() ([]Row, bool) {
 				row.Size = fmt.Sprintf("%dk ctx", row.Ctx/1024)
 			}
 		}
-		s.llamacppMetrics(&row, s.llamacpp+"/metrics"+q)
+		s.routerMetrics(&row, m.ID, s.llamacpp+"/metrics"+q)
 		rows = append(rows, row)
 	}
 	// router is up even when nothing is loaded yet; don't fall back to a phantom row

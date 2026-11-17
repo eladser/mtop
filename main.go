@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,8 +51,13 @@ func hasFlag(args []string, name string) bool {
 			continue
 		}
 		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
-		if a == name || a == name+"=true" {
+		if a == name {
 			return true
+		}
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			if b, err := strconv.ParseBool(v); err == nil && b {
+				return true
+			}
 		}
 	}
 	return false
