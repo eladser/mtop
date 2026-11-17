@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0 (2026-11-10)
+## 1.6.0 (2026-11-17)
 
 ### Added
 - Requests in flight show at the top of the requests pane with a `▶`: elapsed time, output chunks so far (`~42`), a live tok/s once a stream has 3 chunks, and at 100 columns the TTFT and decode time (`ttft 0.42s · dec 3.5s`). A request that is still waiting shows `prefill`, a non-streamed one `not streaming`. The TOK/S line shows the summed live rate. More live requests than fit collapse into a `+N more live` row.
