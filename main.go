@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/eladser/mtop/internal/compare"
+	"github.com/eladser/mtop/internal/demo"
 	"github.com/eladser/mtop/internal/gpu"
 	"github.com/eladser/mtop/internal/notify"
 	"github.com/eladser/mtop/internal/ollama"
@@ -30,7 +32,53 @@ func main() {
 		runCompare(os.Args[2:])
 		return
 	}
+	// looked for by hand: runTop's flag defaults call cfg(), and demo never may
+	if hasFlag(os.Args[1:], "version") {
+		fmt.Println("mtop", version)
+		return
+	}
+	if hasFlag(os.Args[1:], "demo") {
+		runDemo()
+		return
+	}
 	runTop()
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+		if a == name || a == name+"=true" {
+			return true
+		}
+	}
+	return false
+}
+
+// newDemo wires the simulated sources to the ui. No listener, history,
+// notifier or config: the flag is the only way in.
+func newDemo() (*ui.App, *demo.Sim, *proxy.Store) {
+	store := proxy.NewStore(256)
+	sim := demo.New()
+	app := ui.New(sim, sim, store, "", version, 0, nil, 93, 87, true)
+	app.SetDemo()
+	app.SetTarget("demo")
+	return app, sim, store
+}
+
+func runDemo() {
+	app, sim, store := newDemo()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tk := time.NewTicker(50 * time.Millisecond)
+	defer tk.Stop()
+	go sim.Run(ctx, store, time.Now, tk.C)
+	if _, err := tea.NewProgram(app).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
 func runCompare(args []string) {
@@ -72,6 +120,7 @@ func runTop() {
 	tempAlert := flag.Int("temp-alert", 87, "gpu temperature in celsius that turns the alert line on")
 	inspect := flag.Bool("inspect", false, "capture prompt, thinking and completion text for the inspector (i); kept in memory, never written to history")
 	showVer := flag.Bool("version", false, "print version and exit")
+	flag.Bool("demo", false, "run on simulated models, traffic and GPU: no server needed")
 	flag.Parse()
 
 	if *showVer {

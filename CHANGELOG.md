@@ -3,6 +3,7 @@
 ## 1.6.0 (2026-11-10)
 
 ### Added
+- `mtop --demo` runs on simulated models, traffic and a GPU, so there is something to look at without a server. It opens no port, reads no config and writes no files. Titles and the status line are marked DEMO.
 - The Lemonade row shows running requests and tok/s from `/v1/stats` (v2026.43.3 and later). Lemonade reports them server-wide, so they only show with one model loaded.
 - The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
 - On a llama.cpp router each loaded model gets its own slots, context size and running/queued counts, so context-overflow warnings work there too.
