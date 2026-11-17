@@ -24,6 +24,7 @@
 - With three servers up and models on disk, the models pane title wrapped onto a second line in a 100-column terminal and pushed the status line off screen. The title drops the disk count first, then cuts the server list, so it stays on one line.
 - The inspector showed prompt, thinking and completion text as sent, so escape sequences in them reached the terminal. They are dropped now, and tabs become spaces.
 - A long model name (a Hugging Face path, say) wrapped the requests and by-model panes and pushed the status line off screen. Names are cut to 26 columns.
+- The status line was wider than an 80-column terminal and wrapped. It drops help hints until it fits.
 - tok/s on short replies read too high: the first token counted as decoded. The first token now opens the timing window instead of filling it.
 - Bubble Tea updated to v2.1.1 for GHSA-qc58-pfg9-7pph.
 - CI ran with the repo's default token permissions; it gets a read-only token now.

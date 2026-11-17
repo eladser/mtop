@@ -236,8 +236,7 @@ func TestLongModelFitsTerminal(t *testing.T) {
 	for _, w := range []int{80, 100} {
 		for _, by := range []bool{false, true} {
 			lines := view(long, w, by)
-			// the status line is ~90 wide on its own, not this fix
-			for _, l := range lines[:len(lines)-1] {
+			for _, l := range lines {
 				if n := lipgloss.Width(strings.TrimRight(l, " ")); n > w {
 					t.Fatalf("w=%d byModel=%v: line is %d wide: %q", w, by, n, l)
 				}
@@ -247,6 +246,35 @@ func TestLongModelFitsTerminal(t *testing.T) {
 			}
 			if n := len(view("short", w, by)); len(lines) != n {
 				t.Fatalf("w=%d byModel=%v: long name made the view %d lines, short one is %d", w, by, len(lines), n)
+			}
+		}
+	}
+}
+
+func TestStatusLineWidth(t *testing.T) {
+	long := strings.Repeat("unloaded some-very-long-model-name ", 4)
+	for _, w := range []int{80, 100} {
+		for _, tt := range []struct {
+			name string
+			set  func(a *App)
+		}{
+			{"normal", func(a *App) {}},
+			{"normal by model", func(a *App) { a.byModel = true }},
+			{"flash", func(a *App) { a.flash, a.flashAt, a.flashOk = "unloaded qwen3:32b", time.Now(), true }},
+			{"long flash", func(a *App) { a.flash, a.flashAt = long, time.Now() }},
+			{"alert", func(a *App) { a.memAlert = 50 }},
+			{"demo", func(a *App) { a.demo = true }},
+			{"demo flash", func(a *App) { a.demo, a.flash, a.flashAt, a.flashOk = true, "unloaded qwen3:32b", time.Now(), true }},
+		} {
+			a := fixedApp()
+			a.w, a.version, a.listen = w, "1.6.0", "127.0.0.1:4321"
+			tt.set(a)
+			out := a.statusLine()
+			if n := lipgloss.Width(out); n > w {
+				t.Errorf("%s at %d cols: %d wide: %q", tt.name, w, n, stripANSI(out))
+			}
+			if !strings.Contains(stripANSI(out), "quit") && tt.name != "alert" && tt.name != "long flash" {
+				t.Errorf("%s at %d cols lost the quit hint: %q", tt.name, w, stripANSI(out))
 			}
 		}
 	}

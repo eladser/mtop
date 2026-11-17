@@ -329,30 +329,57 @@ func (a *App) clock() time.Time {
 }
 
 func (a *App) statusLine() string {
+	if a.w == 0 {
+		return a.statusText()
+	}
+	return lipgloss.NewStyle().MaxWidth(a.w).Render(a.statusText())
+}
+
+// fit is the first of tiers that leaves room for used columns, else the
+// last (the quit hint), which MaxWidth then cuts if even that is too wide.
+func (a *App) fit(used int, tiers ...string) string {
+	for _, t := range tiers {
+		if a.w == 0 || used+lipgloss.Width(t) <= a.w {
+			return t
+		}
+	}
+	return tiers[len(tiers)-1]
+}
+
+func (a *App) statusText() string {
 	if alert := a.gpuAlert(); alert != "" {
 		return warnSt.Render("  " + alert)
 	}
 	flashing := a.flash != "" && time.Since(a.flashAt) < 12*time.Second
 	if a.demo && !flashing {
-		return demoSt.Render("  " + demoHelp)
+		return demoSt.Render("  " + a.fit(2, demoHelp, demoShort, "q quit"))
 	}
 	proxy := "proxy off"
 	if a.listen != "" {
 		proxy = "proxy on " + a.listen
 	}
-	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · i inspect · q quit · %s · v%s",
-		map[bool]string{true: "requests", false: "by model"}[a.byModel], proxy, a.version)
+	view := map[bool]string{true: "requests", false: "by model"}[a.byModel]
+	help := func(used int) string {
+		return a.fit(used,
+			fmt.Sprintf("↑/↓ select · u unload · c %s · i inspect · q quit · %s · v%s", view, proxy, a.version),
+			fmt.Sprintf("↑/↓ select · u unload · c %s · i inspect · q quit · %s", view, proxy),
+			fmt.Sprintf("↑/↓ select · u unload · c %s · i inspect · q quit", view),
+			"u unload · c "+view+" · q quit",
+			"q quit")
+	}
 	if flashing {
 		st := selSt
 		if !a.flashOk {
 			st = warnSt
 		}
+		msg := "  " + clean(a.flash)
+		used := lipgloss.Width(msg) + 3
 		if a.demo {
-			return st.Render("  "+clean(a.flash)) + demoSt.Render(" · "+demoHelp)
+			return st.Render(msg) + demoSt.Render(" · "+a.fit(used, demoHelp, demoShort, "q quit"))
 		}
-		return st.Render("  "+clean(a.flash)) + dimSt.Render(" ·"+help[2:])
+		return st.Render(msg) + dimSt.Render(" · "+help(used))
 	}
-	return dimSt.Render(help)
+	return dimSt.Render("  " + help(2))
 }
 
 func (a *App) gpuAlert() string {
