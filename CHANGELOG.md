@@ -5,7 +5,7 @@
 ### Added
 - Requests in flight show at the top of the requests pane with a `▶`: elapsed time, output chunks so far (`~42`), a live tok/s once a stream has 3 chunks, and at 100 columns the TTFT and decode time (`ttft 0.42s · dec 3.5s`). A request that is still waiting shows `prefill`, a non-streamed one `not streaming`. The TOK/S line shows the summed live rate. More live requests than fit collapse into a `+N more live` row.
 - The inspector shows the request's TTFT, and `-history` records it.
-- `mtop --demo` runs on simulated models, traffic and a GPU, so there is something to look at without a server. It opens no port, reads no config and writes no files. Titles and the status line are marked DEMO.
+- `mtop --demo` runs on simulated models, traffic and a GPU, so there is something to look at without a server. It opens no port and writes no files, and nothing in it uses the config. Titles and the status line are marked DEMO.
 - The Lemonade row shows running requests and tok/s from `/v1/stats` (v2026.43.3 and later). Lemonade reports them server-wide, so they only show with one model loaded.
 - The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
 - On a llama.cpp router each loaded model gets its own slots, context size and running/queued counts, so context-overflow warnings work there too.
@@ -22,6 +22,9 @@
 - Notes too long for the TTL column (llama.cpp's `3 queued` and `draft 71%`, Lemonade's tok/s) were cut off with no way to see the rest. The selected model's full note now shows on a dim line under the table when its row cuts it.
 - Model names, notes, size and quant from a server, and model names in proxied requests, reached the terminal as sent, so an escape sequence in one could clear the screen, change the window title or write the clipboard. Control characters are dropped from them now.
 - With three servers up and models on disk, the models pane title wrapped onto a second line in a 100-column terminal and pushed the status line off screen. The title drops the disk count first, then cuts the server list, so it stays on one line.
+- The inspector showed prompt, thinking and completion text as sent, so escape sequences in them reached the terminal. They are dropped now, and tabs become spaces.
+- A long model name (a Hugging Face path, say) wrapped the requests and by-model panes and pushed the status line off screen. Names are cut to 26 columns.
+- tok/s on short replies read too high: the first token counted as decoded. The first token now opens the timing window instead of filling it.
 - Bubble Tea updated to v2.1.1 for GHSA-qc58-pfg9-7pph.
 - CI ran with the repo's default token permissions; it gets a read-only token now.
 - The data sources table in `docs/design.md` still listed LM Studio's v0 endpoint and llama.cpp's `/slots`, and had no llama-swap, Lemonade or SGLang rows.

@@ -798,3 +798,46 @@ func TestHostPort(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterKeepsLastMetricsOnProbeFailure(t *testing.T) {
+	failing := false
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/models":
+			w.Write([]byte(`{"data":[{"id":"a","path":"/m/a.gguf","status":{"value":"loaded"}}]}`))
+		case r.URL.Query().Get("model") == "":
+			w.Write([]byte(`{"role":"router","model_path":"none"}`))
+		case r.URL.Path == "/metrics" && failing:
+			http.Error(w, "busy", 503)
+		case r.URL.Path == "/metrics":
+			w.Write([]byte("llamacpp:requests_processing 2\nllamacpp:requests_deferred 1\n"))
+		default:
+			w.Write([]byte(`{"total_slots":4}`))
+		}
+	}))
+	defer lcpp.Close()
+	s := New(nil, lcpp.URL, "", "", "", "", "")
+	scan := func() Row {
+		rows, ok := s.scanLlamacpp()
+		if !ok || len(rows) != 1 {
+			t.Fatalf("ok=%v rows=%+v", ok, rows)
+		}
+		return rows[0]
+	}
+	if r := scan(); r.Busy != 2 || r.Queued != 1 || r.Note == "" {
+		t.Fatalf("baseline: %+v", r)
+	}
+	failing = true
+	for i := 1; i <= 2; i++ {
+		if r := scan(); r.Busy != 2 || r.Queued != 1 || r.Note != "2 running · 1 queued" {
+			t.Fatalf("failure %d blanked the row: %+v", i, r)
+		}
+	}
+	if r := scan(); r.Busy != 0 || r.Queued != 0 || r.Note != "" {
+		t.Fatalf("third failure should blank: %+v", r)
+	}
+	failing = false
+	if r := scan(); r.Busy != 2 {
+		t.Fatalf("recovery: %+v", r)
+	}
+}

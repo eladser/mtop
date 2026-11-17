@@ -143,7 +143,7 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// registered before the round trip: a server that sends headers only
 	// at the first token would otherwise hide the whole prefill
 	var live *Live
-	if ollama || openai || responses {
+	if (ollama || openai || responses) && req.Method == http.MethodPost {
 		live = t.store.Begin(path, reqModel, stream, started)
 	}
 
@@ -159,7 +159,7 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body = &errTap{rc: resp.Body, store: t.store, model: reqModel, live: live}
 		return resp, nil
 	}
-	if ollama || openai || responses {
+	if (ollama || openai || responses) && req.Method == http.MethodPost {
 		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, responses: responses,
 			started: started, inspect: t.inspect, prompt: prompt, live: live, stream: stream}
 	}
@@ -359,12 +359,13 @@ func (t *tap) ttft() time.Duration {
 }
 
 // rate is decode-only tok/s: tokens over the time since the first content
-// chunk. With no first chunk, or under 50ms of window, it's wall time.
+// chunk, minus that first token (it opens the window, it doesn't fill it).
+// With no first chunk, or under 50ms of window, it's wall time.
 func (t *tap) rate(out int, wall time.Duration) float64 {
 	d := wall
 	if !t.first.IsZero() {
-		if w := time.Since(t.first); w >= 50*time.Millisecond {
-			d = w
+		if w := time.Since(t.first); w >= 50*time.Millisecond && out > 1 {
+			d, out = w, out-1
 		}
 	}
 	if d <= 0 {

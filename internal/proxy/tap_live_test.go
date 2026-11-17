@@ -449,3 +449,39 @@ func BenchmarkTapOpenAIChunk(b *testing.B) {
 	b.Run("plain", func(b *testing.B) { benchTap(b, openaiLine, true, false) })
 	b.Run("live", func(b *testing.B) { benchTap(b, openaiLine, true, true) })
 }
+
+func TestRateSkipsFirstToken(t *testing.T) {
+	for _, c := range []struct {
+		out  int
+		want float64
+	}{{2, 1}, {10, 9}, {1, 0.5}} {
+		tp := &tap{first: time.Now().Add(-time.Second)}
+		got := tp.rate(c.out, 2*time.Second)
+		if got < c.want*0.95 || got > c.want*1.05 {
+			t.Errorf("out=%d: got %.2f, want ~%.2f", c.out, got, c.want)
+		}
+	}
+}
+
+func TestLiveRowOnlyForPOST(t *testing.T) {
+	for _, m := range []string{http.MethodOptions, http.MethodGet} {
+		up, ch := gated(t, "text/event-stream")
+		store := NewStore(10)
+		front := proxyFor(t, up.URL, store)
+		req, _ := http.NewRequest(m, front.URL+"/v1/chat/completions", nil)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if resp, err := http.DefaultClient.Do(req); err == nil {
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+		}()
+		time.Sleep(150 * time.Millisecond)
+		if n := len(store.Flights()); n != 0 {
+			t.Errorf("%s created %d live rows", m, n)
+		}
+		close(ch)
+		<-done
+	}
+}

@@ -50,11 +50,13 @@ func (a *App) verdictLine(lineW int) string {
 
 // matchRow finds the row a request for model went to, -1 when unsure.
 // Only rows on the proxy's upstream are candidates, then by name, alias,
-// any alias, name+":latest", and last the only candidate. No guess from
+// any alias, name+":latest". An empty model (not read from the body) goes
+// to the only candidate; a named one never does, since a swapped-out model
+// would land on whatever replaced it. No guess from
 // the request path: the default target is Ollama, whose /v1 traffic would
 // otherwise land on an unrelated row.
 func (a *App) matchRow(model string) int {
-	if a.target == "" || model == "" {
+	if a.target == "" {
 		return -1
 	}
 	var cand []int
@@ -91,7 +93,7 @@ func (a *App) matchRow(model string) int {
 	if i := pass(func(r sources.Row) bool { return strings.EqualFold(r.Name, model+":latest") }); i >= 0 {
 		return i
 	}
-	if len(cand) == 1 {
+	if model == "" && len(cand) == 1 {
 		return cand[0]
 	}
 	return -1
@@ -113,7 +115,11 @@ func (a *App) judge() {
 	}
 	for _, r := range a.store.Recent(256) {
 		if i := a.matchRow(r.Model); i >= 0 {
-			ms[i].Reqs = append(ms[i].Reqs, verdict.Req{When: r.When, Ctx: r.Ctx, PromptTk: r.PromptTk, Overflow: r.Overflow})
+			ctx := r.Ctx
+			if ctx == 0 {
+				ctx = a.rows[i].Ctx // client sent an alias or no :latest, the store lookup missed
+			}
+			ms[i].Reqs = append(ms[i].Reqs, verdict.Req{When: r.When, Ctx: ctx, PromptTk: r.PromptTk, Overflow: r.Overflow})
 		}
 	}
 	for _, f := range a.store.Flights() {

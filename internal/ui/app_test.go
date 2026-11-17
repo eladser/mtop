@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/eladser/mtop/internal/proxy"
 	"github.com/eladser/mtop/internal/sources"
 )
@@ -202,5 +204,50 @@ func TestSetTargetAndClock(t *testing.T) {
 	a.SetDemo()
 	if !a.demo {
 		t.Fatal("SetDemo")
+	}
+}
+
+func TestInspectorStripsEscapes(t *testing.T) {
+	evil := "a\x1b[2Jb\x1b]52;c;AAAA\x07c\x1b]0;title\x07d\re\tf\r\ng\x9b2J"
+	store := proxy.NewStore(5)
+	store.Add(proxy.Request{When: time.Now(), Model: "m", Prompt: evil, Thinking: evil, Completion: evil})
+	a := &App{store: store, inspect: true, w: 100, h: 40}
+	out := a.inspectorPane()
+	for _, bad := range []string{"\x1b[2J", "\x1b]", "\x07", "\r", "\t", "\x9b"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("inspector leaks %q:\n%q", bad, out)
+		}
+	}
+	if !strings.Contains(stripANSI(out), "de    f") {
+		t.Fatalf("tab should become spaces:\n%q", stripANSI(out))
+	}
+}
+
+func TestLongModelFitsTerminal(t *testing.T) {
+	t.Setenv("MTOP_GPU", "apple")
+	long := strings.Repeat("hf.co/some-org/Some-Model-GGUF-", 2)[:60]
+	view := func(model string, w int, by bool) []string {
+		store := proxy.NewStore(5)
+		store.Add(proxy.Request{When: time.Now(), Model: model, OutTk: 5, TokSec: 3})
+		a := fixedApp()
+		a.store, a.w, a.byModel = store, w, by
+		return strings.Split(stripANSI(a.View().Content), "\n")
+	}
+	for _, w := range []int{80, 100} {
+		for _, by := range []bool{false, true} {
+			lines := view(long, w, by)
+			// the status line is ~90 wide on its own, not this fix
+			for _, l := range lines[:len(lines)-1] {
+				if n := lipgloss.Width(strings.TrimRight(l, " ")); n > w {
+					t.Fatalf("w=%d byModel=%v: line is %d wide: %q", w, by, n, l)
+				}
+			}
+			if !strings.Contains(lines[len(lines)-1], "quit") {
+				t.Fatalf("w=%d byModel=%v: status line not last: %q", w, by, lines[len(lines)-1])
+			}
+			if n := len(view("short", w, by)); len(lines) != n {
+				t.Fatalf("w=%d byModel=%v: long name made the view %d lines, short one is %d", w, by, len(lines), n)
+			}
+		}
 	}
 }

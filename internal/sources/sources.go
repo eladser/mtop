@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eladser/mtop/internal/ollama"
@@ -42,6 +43,8 @@ type Scanner struct {
 	lemonade  string
 	sglang    string
 	hc        *http.Client
+	mu        sync.Mutex
+	probes    map[string]*probe
 }
 
 func New(olls []*ollama.Client, llamacpp, lmstudio, vllm, llamaswap, lemonade, sglang string) *Scanner {
@@ -184,4 +187,11 @@ func withBase(rows []Row, base string) []Row {
 		rows[i].Base = hp
 	}
 	return rows
+}
+
+// probe is the last good router-child metrics reading.
+type probe struct {
+	note         string
+	busy, queued int
+	fails        int
 }

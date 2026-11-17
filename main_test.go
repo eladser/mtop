@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +81,10 @@ func TestHasFlag(t *testing.T) {
 		{[]string{"--demo"}, true},
 		{[]string{"-demo"}, true},
 		{[]string{"-demo=true"}, true},
+		{[]string{"-demo=1"}, true},
+		{[]string{"--demo=t"}, true},
+		{[]string{"-demo=0"}, false},
+		{[]string{"-demo=bogus"}, false},
 		{[]string{"-ollama", "http://x:1", "--demo"}, true},
 		{[]string{"-demo=false"}, false},
 		{[]string{"demo"}, false},
@@ -93,16 +98,27 @@ func TestHasFlag(t *testing.T) {
 	}
 }
 
-// the listen address from the environment must not be used or opened in demo
+// the configured ollama and listen address must not be dialed or opened in demo
 func TestDemoOpensNoListener(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ln.Close()
 	addr := ln.Addr().String()
-	ln.Close()
+	var conns atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			c.Close()
+		}
+	}()
 	t.Setenv("MTOP_LISTEN", addr)
-	t.Setenv("MTOP_OLLAMA", "http://127.0.0.1:1")
+	t.Setenv("MTOP_OLLAMA", "http://"+addr)
 	t.Setenv("MTOP_GPU", "nvidia")
 	conf["MTOP_LISTEN"] = addr
 	t.Cleanup(func() { delete(conf, "MTOP_LISTEN") })
@@ -112,9 +128,9 @@ func TestDemoOpensNoListener(t *testing.T) {
 	app.Update(app.Init()().(tea.BatchMsg)[0]())
 	out := stripANSI(app.View().Content)
 
-	if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
-		c.Close()
-		t.Fatalf("something is listening on %s", addr)
+	time.Sleep(100 * time.Millisecond)
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("demo connected to the configured address %d times", n)
 	}
 	for _, want := range []string{"MODELS", "DEMO: simulated data", "Simulated GPU (24 GB)", "GPU  DEMO", "qwen3:32b"} {
 		if !strings.Contains(out, want) {
