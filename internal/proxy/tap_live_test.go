@@ -108,6 +108,8 @@ func TestLiveOllamaStream(t *testing.T) {
 	if got.String() != strings.Join(lines, "")+done {
 		t.Fatalf("client bytes changed: %q", got.String())
 	}
+	// recording happens in Close, just after the client has read the last byte
+	eventually(t, 2*time.Second, func() bool { return len(store.Recent(1)) == 1 })
 	if len(store.Flights()) != 0 {
 		t.Fatalf("flight should be gone once recorded: %+v", store.Flights())
 	}
@@ -253,6 +255,7 @@ func TestLiveIncludeUsageUsesTimings(t *testing.T) {
 		close(ch)
 	}()
 	io.Copy(io.Discard, resp.Body)
+	eventually(t, 2*time.Second, func() bool { return len(store.Recent(1)) == 1 })
 	r := store.Recent(1)
 	if len(r) != 1 || r[0].TokSec != 77.5 || r[0].OutTk != 42 {
 		t.Fatalf("record: %+v", r)
@@ -273,6 +276,7 @@ func TestOpenAIDecodeOnlyRate(t *testing.T) {
 		close(ch)
 	}()
 	io.Copy(io.Discard, resp.Body)
+	eventually(t, 2*time.Second, func() bool { return len(store.Recent(1)) == 1 })
 	r := store.Recent(1)
 	if len(r) != 1 {
 		t.Fatal("no record")
@@ -294,6 +298,7 @@ func TestOpenAIWallRateWithoutFirstToken(t *testing.T) {
 		close(ch)
 	}()
 	io.Copy(io.Discard, resp.Body)
+	eventually(t, 2*time.Second, func() bool { return len(store.Recent(1)) == 1 })
 	r := store.Recent(1)[0]
 	if r.TTFT != 0 || r.TokSec != float64(r.OutTk)/r.Total.Seconds() {
 		t.Fatalf("want wall time: %+v", r)
