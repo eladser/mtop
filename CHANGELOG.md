@@ -7,6 +7,7 @@
 - The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
 
 ### Fixed
+- A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - The llama.cpp row read `kv 0%` on current llama.cpp, which dropped the kv-cache gauge from `/metrics`. The kv figure only shows when the server reports it.
 - Notes too long for the TTL column (llama.cpp's `3 queued` and `draft 71%`, Lemonade's tok/s) were cut off with no way to see the rest. The selected model's full note now shows on a dim line under the table when its row cuts it.
 - Model names, notes, size and quant from a server, and model names in proxied requests, reached the terminal as sent, so an escape sequence in one could clear the screen, change the window title or write the clipboard. Control characters are dropped from them now.
@@ -35,6 +36,7 @@
 - The proxy peeks at request bodies (for the model name) up to 8 MiB; anything larger passes through unlabelled.
 
 ### Fixed
+- A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - An older Lemonade on :8000 showed up as vLLM.
 - The by-model view reshuffled rows that tied.
 - llama-swap on :8080 also showed up as a second llama.cpp row.
@@ -49,6 +51,7 @@
 - LM Studio's v1 REST API (`/api/v1/models`, 0.4 and later), with a fallback to v0 for older installs.
 
 ### Fixed
+- A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - vLLM kv-cache always read 0% on vLLM 0.12+, which renamed the metric to `vllm:kv_cache_usage_perc`. Both names are read now.
 - Any server answering on a probed port (a dev server on :8000, say) showed up as a phantom vllm or llama.cpp row. Non-2xx responses now count as nothing there.
 - Streamed OpenAI-style requests without a `usage` block weren't recorded. They are now, using llama.cpp's own timings when present and a chunk-count estimate otherwise (marked as estimated). The proxy still passes the stream through untouched.
@@ -81,6 +84,7 @@
 - The proxy only answers loopback callers and rejects cross-origin requests, so a browser tab can't drive the ollama API through it.
 
 ### Fixed
+- A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - `/metrics` per-model rows and percentiles could disagree under load.
 - Footer showed the proxy address with `-no-proxy`.
 - The 1 MiB stream cap wasn't applied to the final flush.
@@ -88,6 +92,7 @@
 ## 1.1.2 (2026-06-10)
 
 ### Fixed
+- A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - Proxy stops buffering after 1 MiB while looking for the final chunk.
 - `~/.mtop.conf` values no longer leak into the environment of child processes.
 - Warning when the proxy binds beyond loopback.
@@ -96,6 +101,7 @@
 ## 1.1.1 (2026-06-10)
 
 ### Fixed
+- A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - Model rows wrapped and broke the layout with more than one server up.
 
 ## 1.1.0 (2026-06-10)
