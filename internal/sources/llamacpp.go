@@ -14,6 +14,7 @@ func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 		return nil, false
 	}
 	var props struct {
+		Role      string `json:"role"`
 		ModelPath string `json:"model_path"`
 		Settings  struct {
 			NCtx int `json:"n_ctx"`
@@ -22,9 +23,9 @@ func (s *Scanner) scanLlamacpp() ([]Row, bool) {
 	if s.getJSON(s.llamacpp+"/props", &props) != nil {
 		return nil, false
 	}
-	// router mode (llama-server started without -m) has no single model,
-	// so /props comes back with an empty path; list what's loaded instead
-	if props.ModelPath == "" {
+	// router mode (llama-server started without -m) has no single model:
+	// /props says role "router" and model_path "none" (older builds: empty)
+	if props.Role == "router" || props.ModelPath == "" || props.ModelPath == "none" {
 		if rows, ok := s.scanLlamacppRouter(); ok {
 			return rows, true
 		}

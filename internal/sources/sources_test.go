@@ -171,7 +171,7 @@ func TestScanLlamacppRouterMode(t *testing.T) {
 	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/props":
-			w.Write([]byte(`{"model_path":"","default_generation_settings":{"n_ctx":0}}`))
+			w.Write([]byte(`{"role":"router","model_path":"none","model_alias":"llama-server","default_generation_settings":{"n_ctx":0}}`))
 		case "/models":
 			w.Write([]byte(`{"data":[
 				{"id":"a","path":"/models/a.gguf","status":{"value":"loaded"}},
@@ -195,7 +195,7 @@ func TestScanLlamacppRouterIdle(t *testing.T) {
 	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/props":
-			w.Write([]byte(`{"model_path":""}`))
+			w.Write([]byte(`{"role":"router","model_path":"none","model_alias":"llama-server","default_generation_settings":{"n_ctx":0}}`))
 		case "/models":
 			w.Write([]byte(`{"data":[{"id":"b","path":"/models/b.gguf","status":{"value":"unloaded"}}]}`))
 		}
@@ -205,6 +205,24 @@ func TestScanLlamacppRouterIdle(t *testing.T) {
 	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
 	if !ok || len(rows) != 0 {
 		t.Fatalf("idle router: want alive with no rows, got ok=%v rows=%+v", ok, rows)
+	}
+}
+
+func TestScanLlamacppRouterOlderBuild(t *testing.T) {
+	// builds without a role field report an empty model_path in router mode
+	lcpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			w.Write([]byte(`{"model_path":""}`))
+		case "/models":
+			w.Write([]byte(`{"data":[{"id":"a","path":"/models/a.gguf","status":{"value":"loaded"}}]}`))
+		}
+	}))
+	defer lcpp.Close()
+
+	rows, ok := New(nil, lcpp.URL, "", "", "", "", "").scanLlamacpp()
+	if !ok || len(rows) != 1 || rows[0].Name != "a.gguf" {
+		t.Fatalf("want the loaded model, got ok=%v rows=%+v", ok, rows)
 	}
 }
 
