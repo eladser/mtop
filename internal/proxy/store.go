@@ -16,6 +16,7 @@ type Request struct {
 	OutTk      int
 	TokSec     float64
 	Total      time.Duration
+	TTFT       time.Duration // request start to first content chunk, 0 if unknown
 	Load       time.Duration // model load time (ollama, inspector)
 	PromptEval time.Duration // prompt processing time (ollama, inspector)
 	Prompt     string        `json:"-"` // captured only with -inspect, never persisted
@@ -77,7 +78,16 @@ type Store struct {
 	now      func() time.Time // test hook, nil means time.Now
 }
 
+// SetNow swaps the clock Flights uses for its leak guard. For tests that
+// fix flight times in the past.
+func (s *Store) SetNow(f func() time.Time) {
+	s.mu.Lock()
+	s.now = f
+	s.mu.Unlock()
+}
+
 func NewStore(max int) *Store {
+
 	return &Store{max: max, overflow: map[string]int{}}
 }
 

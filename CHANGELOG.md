@@ -3,11 +3,17 @@
 ## 1.6.0 (2026-11-10)
 
 ### Added
+- Requests in flight show at the top of the requests pane with a `▶`: elapsed time, output chunks so far (`~42`), a live tok/s once a stream has 3 chunks, and at 100 columns the TTFT and decode time (`ttft 0.42s · dec 3.5s`). A request that is still waiting shows `prefill`, a non-streamed one `not streaming`. The TOK/S line shows the summed live rate. More live requests than fit collapse into a `+N more live` row.
+- The inspector shows the request's TTFT, and `-history` records it.
 - The Lemonade row shows running requests and tok/s from `/v1/stats` (v2026.43.3 and later). Lemonade reports them server-wide, so they only show with one model loaded.
 - The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
 - On a llama.cpp router each loaded model gets its own slots, context size and running/queued counts, so context-overflow warnings work there too.
 
+### Changed
+- tok/s for streamed OpenAI-style requests (llama.cpp, LM Studio, vLLM, SGLang, Ollama's `/v1`, `/v1/responses`) is decode-only now: llama.cpp's own `predicted_per_second` when it sends one, otherwise output tokens over the time since the first token, so prompt processing and model load no longer count. `-history` mixes the old wall-time numbers and the new ones. Non-streamed requests, Ollama's native API and `mtop compare -openai` are unchanged.
+
 ### Fixed
+
 - A llama.cpp router showed a phantom `none` row instead of its loaded models.
 - The llama.cpp row read `kv 0%` on current llama.cpp, which dropped the kv-cache gauge from `/metrics`. The kv figure only shows when the server reports it.
 - Notes too long for the TTL column (llama.cpp's `3 queued` and `draft 71%`, Lemonade's tok/s) were cut off with no way to see the rest. The selected model's full note now shows on a dim line under the table when its row cuts it.

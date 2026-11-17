@@ -103,18 +103,20 @@ func (l *Live) End() {
 
 // Flights returns copies of what's in flight, oldest first.
 func (s *Store) Flights() []Flight {
-	now := time.Now()
-	if s.now != nil {
-		now = s.now()
-	}
 	s.mu.Lock()
+	clk := s.now
 	ls := make([]*Live, 0, len(s.flights))
 	for _, l := range s.flights {
 		ls = append(ls, l)
 	}
 	s.mu.Unlock()
+	now := time.Now()
+	if clk != nil {
+		now = clk()
+	}
 
 	out := make([]Flight, 0, len(ls))
+
 	for _, l := range ls {
 		l.mu.Lock()
 		f := Flight{ID: l.id, Path: l.path, Model: l.model, Stream: l.stream,

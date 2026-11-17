@@ -121,6 +121,7 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	responses := path == "/v1/responses"
 
 	var prompt, reqModel string
+	stream := ollama // openai-style streams only when the body says so
 	if (ollama || openai || responses) && req.Body != nil {
 		// peek at most 8 MiB (base64 images can be big); anything past that
 		// streams through untouched and just doesn't get a model label
@@ -129,39 +130,53 @@ func (t *tapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			io.Reader
 			io.Closer
 		}{io.MultiReader(bytes.NewReader(body), req.Body), req.Body}
-		reqModel = modelOf(body)
+		var sp *bool
+		reqModel, sp = peek(body)
+		if sp != nil {
+			stream = *sp
+		}
 		if t.inspect {
 			prompt = promptOf(body)
 		}
 	}
 
+	// registered before the round trip: a server that sends headers only
+	// at the first token would otherwise hide the whole prefill
+	var live *Live
+	if ollama || openai || responses {
+		live = t.store.Begin(path, reqModel, stream, started)
+	}
+
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
+		live.End()
 		return nil, err
 	}
 	// a 4xx on a generation path is worth a look: it's how llama.cpp,
 	// vLLM, SGLang and ollama (with truncate:false) report a prompt that
 	// blew the context window
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && (ollama || openai || responses) {
-		resp.Body = &errTap{rc: resp.Body, store: t.store, model: reqModel}
+		resp.Body = &errTap{rc: resp.Body, store: t.store, model: reqModel, live: live}
 		return resp, nil
 	}
 	if ollama || openai || responses {
 		resp.Body = &tap{rc: resp.Body, store: t.store, path: path, openai: openai, responses: responses,
-			started: started, inspect: t.inspect, prompt: prompt}
+			started: started, inspect: t.inspect, prompt: prompt, live: live, stream: stream}
 	}
 	return resp, nil
 }
 
-// modelOf pulls the model name out of a request body, ollama or openai
-// shape. Best effort, used to label a rejected request since the error
-// body itself rarely names the model.
-func modelOf(body []byte) string {
+// peek pulls the model name and the stream flag out of a request body,
+// ollama or openai shape. Best effort: the model labels a flight or a
+// rejected request (the error body rarely names it); stream is nil when
+// the body doesn't say.
+func peek(body []byte) (model string, stream *bool) {
 	var b struct {
-		Model string `json:"model"`
+		Model  string `json:"model"`
+		Stream *bool  `json:"stream"`
 	}
 	json.Unmarshal(body, &b)
-	return b.Model
+	return b.Model, b.Stream
 }
 
 type chatMsg struct {
@@ -294,6 +309,11 @@ type tap struct {
 	buf       bytes.Buffer
 	done      bool
 
+	live    *Live
+	stream  bool
+	first   time.Time // first content chunk, for ttft and decode-only tok/s
+	modeled bool      // live model already taken from a response chunk
+
 	// openai streaming without a usage block: llama.cpp's own timings on
 	// the last chunk are exact, otherwise tokens are estimated from the
 	// number of content-bearing delta chunks seen.
@@ -307,6 +327,55 @@ type oaiTimings struct {
 	CacheN             int     `json:"cache_n"` // reused from context shifting; not part of prompt_n
 	PredictedN         int     `json:"predicted_n"`
 	PredictedPerSecond float64 `json:"predicted_per_second"`
+}
+
+// tick counts a content chunk. A non-streamed body is one object with
+// the whole text, so it never counts.
+func (t *tap) tick(n int) {
+	if !t.stream {
+		return
+	}
+	now := time.Now()
+	if t.first.IsZero() {
+		t.first = now
+	}
+	t.live.Tick(n, now)
+}
+
+// model hands the first response chunk's model name to the live row.
+func (t *tap) model(m string) {
+	if m == "" || t.modeled {
+		return
+	}
+	t.modeled = true
+	t.live.SetModel(m)
+}
+
+func (t *tap) ttft() time.Duration {
+	if t.first.IsZero() {
+		return 0
+	}
+	return t.first.Sub(t.started)
+}
+
+// rate is decode-only tok/s: tokens over the time since the first content
+// chunk. With no first chunk, or under 50ms of window, it's wall time.
+func (t *tap) rate(out int, wall time.Duration) float64 {
+	d := wall
+	if !t.first.IsZero() {
+		if w := time.Since(t.first); w >= 50*time.Millisecond {
+			d = w
+		}
+	}
+	if d <= 0 {
+		return 0
+	}
+	return float64(out) / d.Seconds()
+}
+
+func (t *tap) add(r Request) {
+	r.TTFT = t.ttft()
+	t.store.Complete(t.live, r)
 }
 
 func (t *tap) Read(b []byte) (int, error) {
@@ -351,6 +420,10 @@ func (t *tap) record(line []byte) {
 	if json.Unmarshal(line, &c) != nil {
 		return
 	}
+	t.model(c.Model)
+	if c.Response != "" || c.Message.Content != "" || c.Thinking != "" || c.Message.Thinking != "" {
+		t.tick(1)
+	}
 	if t.inspect && t.comp.Len() < 2048 {
 		t.comp.WriteString(c.Response)
 		t.comp.WriteString(c.Message.Content)
@@ -382,7 +455,7 @@ func (t *tap) record(line []byte) {
 		r.Completion = clip(t.comp.String())
 		r.Thinking = clip(t.think.String())
 	}
-	t.store.Add(r)
+	t.add(r)
 }
 
 // OpenAI-style responses (llama.cpp, LM Studio, vLLM all speak this) put
@@ -423,6 +496,7 @@ func (t *tap) recordOpenAI(line []byte) {
 	}
 	if c.Model != "" {
 		t.oModel = c.Model
+		t.model(c.Model)
 	}
 	if c.Timings != nil {
 		t.oTimings = c.Timings
@@ -436,6 +510,7 @@ func (t *tap) recordOpenAI(line []byte) {
 		}
 		if ch.Delta.Content != "" || think != "" {
 			t.oDeltas++
+			t.tick(1)
 		}
 		if t.inspect && t.comp.Len() < 2048 {
 			t.comp.WriteString(ch.Delta.Content)
@@ -458,15 +533,17 @@ func (t *tap) recordOpenAI(line []byte) {
 		Ctx:      t.store.CtxFor(c.Model),
 		Total:    wall,
 	}
-	if s := wall.Seconds(); s > 0 {
-		r.TokSec = float64(c.Usage.CompletionTokens) / s
+	if tm := c.Timings; tm != nil && tm.PredictedPerSecond > 0 {
+		r.TokSec = tm.PredictedPerSecond
+	} else {
+		r.TokSec = t.rate(c.Usage.CompletionTokens, wall)
 	}
 	if t.inspect {
 		r.Prompt = t.prompt
 		r.Completion = clip(t.comp.String())
 		r.Thinking = clip(t.think.String())
 	}
-	t.store.Add(r)
+	t.add(r)
 }
 
 // finishOpenAI records a streamed request that never got a usage block.
@@ -491,9 +568,7 @@ func (t *tap) finishOpenAI() {
 	case t.oDeltas > 0:
 		r.OutTk = t.oDeltas
 		r.Estimated = true
-		if s := wall.Seconds(); s > 0 {
-			r.TokSec = float64(t.oDeltas) / s
-		}
+		r.TokSec = t.rate(t.oDeltas, wall)
 	default:
 		return
 	}
@@ -502,7 +577,7 @@ func (t *tap) finishOpenAI() {
 		r.Completion = clip(t.comp.String())
 		r.Thinking = clip(t.think.String())
 	}
-	t.store.Add(r)
+	t.add(r)
 }
 
 // /v1/responses (llama.cpp's OpenAI Responses API passthrough) carries
@@ -512,9 +587,6 @@ func (t *tap) recordResponses(line []byte) {
 	line = bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:")))
 	if len(line) == 0 || bytes.Equal(line, []byte("[DONE]")) {
 		return
-	}
-	if t.inspect {
-		t.captureResponsesDelta(line)
 	}
 	type usage struct {
 		InputTokens  int `json:"input_tokens"`
@@ -535,9 +607,11 @@ func (t *tap) recordResponses(line []byte) {
 		} `json:"summary"`
 	}
 	var c struct {
-		Model    string    `json:"model"`
-		Usage    *usage    `json:"usage"`
-		Output   []outItem `json:"output"`
+		Type     string          `json:"type"`
+		Delta    json.RawMessage `json:"delta"` // a string on the three text events, other shapes elsewhere
+		Model    string          `json:"model"`
+		Usage    *usage          `json:"usage"`
+		Output   []outItem       `json:"output"`
 		Response *struct {
 			Model  string    `json:"model"`
 			Usage  *usage    `json:"usage"`
@@ -547,6 +621,11 @@ func (t *tap) recordResponses(line []byte) {
 	if json.Unmarshal(line, &c) != nil {
 		return
 	}
+	t.model(c.Model)
+	if c.Response != nil {
+		t.model(c.Response.Model)
+	}
+	t.captureResponsesDelta(c.Type, c.Delta)
 	model, u, out := c.Model, c.Usage, c.Output
 	if c.Response != nil {
 		if c.Response.Model != "" {
@@ -573,9 +652,8 @@ func (t *tap) recordResponses(line []byte) {
 		Ctx:      t.store.CtxFor(model),
 		Total:    wall,
 	}
-	if s := wall.Seconds(); s > 0 {
-		r.TokSec = float64(u.OutputTokens) / s
-	}
+	r.TokSec = t.rate(u.OutputTokens, wall)
+
 	if t.inspect {
 		r.Prompt = t.prompt
 		// a plain SSE stream already filled comp/think chunk by chunk via
@@ -601,30 +679,31 @@ func (t *tap) recordResponses(line []byte) {
 		r.Completion = clip(t.comp.String())
 		r.Thinking = clip(t.think.String())
 	}
-	t.store.Add(r)
+	t.add(r)
 }
 
-// captureResponsesDelta accumulates a streamed answer/thinking event as it
-// goes by; response.output_text.delta is the answer, response.reasoning_text
-// and response.reasoning_summary_text deltas are the thinking (the raw trace
-// is org-gated, so most keys only ever see the summary one).
-func (t *tap) captureResponsesDelta(line []byte) {
-	var d struct {
-		Type  string `json:"type"`
-		Delta string `json:"delta"`
-	}
-	if json.Unmarshal(line, &d) != nil {
+// captureResponsesDelta counts a streamed answer/thinking event for the live
+// row and, with -inspect, accumulates its text. response.output_text.delta is
+// the answer, response.reasoning_text and response.reasoning_summary_text
+// deltas are the thinking (the raw trace is org-gated, so most keys only ever
+// see the summary one).
+func (t *tap) captureResponsesDelta(typ string, raw json.RawMessage) {
+	var dst *strings.Builder
+	switch typ {
+	case "response.output_text.delta":
+		dst = &t.comp
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		dst = &t.think
+	default:
 		return
 	}
-	switch d.Type {
-	case "response.output_text.delta":
-		if t.comp.Len() < 2048 {
-			t.comp.WriteString(d.Delta)
-		}
-	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
-		if t.think.Len() < 2048 {
-			t.think.WriteString(d.Delta)
-		}
+	var d string
+	if json.Unmarshal(raw, &d) != nil || d == "" {
+		return
+	}
+	t.tick(1)
+	if t.inspect && dst.Len() < 2048 {
+		dst.WriteString(d)
 	}
 }
 
@@ -635,7 +714,9 @@ func (t *tap) Close() error {
 	if t.openai && !t.done {
 		t.finishOpenAI()
 	}
-	return t.rc.Close()
+	err := t.rc.Close()
+	t.live.End()
+	return err
 }
 
 // errTap watches a 4xx body go by looking for a context-length rejection.
@@ -647,6 +728,7 @@ type errTap struct {
 	model string
 	buf   bytes.Buffer
 	done  bool
+	live  *Live
 }
 
 func (e *errTap) Read(b []byte) (int, error) {
@@ -672,12 +754,14 @@ func (e *errTap) finish() {
 	e.done = true
 	ctx, promptTk, ok := detectOverflow(e.buf.Bytes())
 	if !ok {
+		e.live.End()
 		return
 	}
 	if ctx == 0 {
 		ctx = e.store.CtxFor(e.model)
 	}
-	e.store.Add(Request{When: time.Now(), Model: e.model, Overflow: true, PromptTk: promptTk, Ctx: ctx})
+	e.store.Complete(e.live, Request{When: time.Now(), Model: e.model, Overflow: true, PromptTk: promptTk, Ctx: ctx})
+
 }
 
 // detectOverflow looks for the handful of ways a server says "no, that
