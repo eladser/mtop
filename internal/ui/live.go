@@ -125,16 +125,6 @@ func liveTail(f proxy.Flight, now time.Time, avail int) string {
 	return ""
 }
 
-// liveElapsed is the TOTAL cell of a live row: 3.9s, 1m05s past 100s.
-func liveElapsed(d time.Duration) string {
-	d = max(d, 0).Round(100 * time.Millisecond)
-	if d < 100*time.Second {
-		return fmt.Sprintf("%.1fs", d.Seconds())
-	}
-	s := int(d.Seconds())
-	return fmt.Sprintf("%dm%02ds", s/60, s%60)
-}
-
 // liveClock is the TIME cell of a live row, right-aligned in 8 columns:
 // 3.2s under a minute, 2m05s after.
 func liveClock(d time.Duration) string {
@@ -182,7 +172,8 @@ func (a *App) liveRow(f proxy.Flight, now time.Time, avail int) string {
 	}
 	var b strings.Builder
 	b.WriteString(selSt.Render("▶"))
-	fmt.Fprintf(&b, "%8s %-26s %10s %6s %8s  %s", liveClock(now.Sub(f.Started)), model, tok, out, "-", liveElapsed(now.Sub(f.Started)))
+	fmt.Fprintf(&b, "%8s %-26s %10s %6s %8s  %s", liveClock(now.Sub(f.Started)), model, tok, out, "-", "-")
+
 	if t := liveTail(f, now, avail); t != "" {
 		b.WriteString("  " + dimSt.Render(t))
 	}

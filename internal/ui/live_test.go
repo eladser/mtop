@@ -100,21 +100,6 @@ func TestLiveTailFits(t *testing.T) {
 	}
 }
 
-func TestLiveElapsed(t *testing.T) {
-	for d, want := range map[time.Duration]string{
-		3900 * time.Millisecond:  "3.9s",
-		99940 * time.Millisecond: "99.9s",
-		99960 * time.Millisecond: "1m40s",
-		65 * time.Second:         "65.0s",
-		105 * time.Second:        "1m45s",
-		-time.Second:             "0.0s",
-	} {
-		if got := liveElapsed(d); got != want {
-			t.Errorf("%v: %q, want %q", d, got, want)
-		}
-	}
-}
-
 func liveApp(w int) *App {
 	a := fixedApp()
 	a.w = w
