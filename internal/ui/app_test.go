@@ -184,3 +184,23 @@ func TestInspectorShowsThinking(t *testing.T) {
 		t.Fatal("thinking block should be hidden when empty")
 	}
 }
+
+func TestSetTargetAndClock(t *testing.T) {
+	a := &App{}
+	a.SetTarget("http://localhost:11434/v1")
+	if a.target != "localhost:11434" {
+		t.Fatalf("target %q", a.target)
+	}
+	if a.clock().IsZero() {
+		t.Fatal("nil now should fall back to time.Now")
+	}
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return fixed }
+	if !a.clock().Equal(fixed) {
+		t.Fatal("clock ignored a.now")
+	}
+	a.SetDemo()
+	if !a.demo {
+		t.Fatal("SetDemo")
+	}
+}

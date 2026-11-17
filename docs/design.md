@@ -46,6 +46,8 @@ Traffic through the proxy is plain http with no auth. Fine on loopback, a bad id
 
 The proxy forwards everything to ollama, including the endpoints that delete or pull models, so it checks the Host and Origin on the way in. A request has to come in with a loopback Host (or the address you bound to), and any Origin header has to be local. That stops a web page you have open from POSTing to the proxy or rebinding dns to read it. The browser shares your loopback, so binding to 127.0.0.1 isn't enough by itself. CLI clients and SDKs send neither header and call with a loopback Host, so nothing changes for them.
 
+mtop only touches the sleep-exempt llama.cpp endpoints (`/health`, `/props`, `/models`, `/metrics`). `/slots` is deliberately not polled: it wakes a sleeping server and resets `--sleep-idle-seconds`, so models would never unload. On a router, `/props` and `/metrics` are probed per loaded model with `?model=<id>&autoload=false`, never for an unloaded one.
+
 `/metrics` on the proxy port re-exports what the tap has seen plus the last GPU read, prometheus format.
 
 `mtop compare "<prompt>" model...` is a separate subcommand, not part of the dashboard. It sends the prompt to each model in turn (sequential, so they don't share the GPU mid-run) and prints tok/s, tokens, and total time, fastest first. Useful for "is the bigger model actually worth the slowdown" without eyeballing the requests pane.

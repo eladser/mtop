@@ -21,13 +21,14 @@ func (s *Scanner) scanSglang() ([]Row, bool) {
 	if name == "." || name == "/" || name == "" {
 		name = "(model)"
 	}
-	note := ""
+	note, busy, queued := "", 0, 0
 	if m, err := s.getProm(s.sglang + "/metrics"); err == nil {
 		kv := promVal(m, "sglang:token_usage", "sglang_token_usage")
 		running := promVal(m, "sglang:num_running_reqs", "sglang_num_running_reqs")
 		note = fmt.Sprintf("kv %.0f%% · %d running", kv*100, int(running))
+		busy, queued = int(running), int(promVal(m, "sglang:num_queue_reqs", "sglang_num_queue_reqs"))
 	}
-	return []Row{{Name: name, From: "sglang", Note: note}}, true
+	return []Row{{Name: name, From: "sglang", Note: note, Busy: busy, Queued: queued}}, true
 }
 
 func promVal(m map[string]float64, names ...string) float64 {

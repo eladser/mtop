@@ -21,5 +21,7 @@ func (s *Scanner) scanVllm() ([]Row, bool) {
 	}
 	note := fmt.Sprintf("cache %.0f%% · %d running",
 		cache*100, int(m.vals["vllm:num_requests_running"]))
-	return []Row{{Name: name, From: "vllm", Note: note}}, true
+	busy := int(promVal(m.vals, "vllm:num_requests_running", "vllm_num_requests_running"))
+	queued := int(promVal(m.vals, "vllm:num_requests_waiting", "vllm_num_requests_waiting"))
+	return []Row{{Name: name, From: "vllm", Note: note, Busy: busy, Queued: queued}}, true
 }

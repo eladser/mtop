@@ -33,8 +33,8 @@ var (
 var paneBorder = paneSt.GetHorizontalBorderSize()
 
 type App struct {
-	scan      *sources.Scanner
-	gpu       *gpu.Reader
+	scan      Scanner
+	gpu       GPU
 	store     *proxy.Store
 	listen    string
 	version   string
@@ -43,6 +43,10 @@ type App struct {
 	memAlert  int
 	tempAlert int
 	inspect   bool // whether prompt/completion capture is on
+
+	now    func() time.Time // nil means time.Now, use clock()
+	target string           // host:port the proxy forwards to, for matching traffic to rows
+	demo   bool
 
 	w, h    int
 	sel     int
@@ -72,9 +76,9 @@ type App struct {
 
 type trace struct{ util, mem []float64 }
 
-func New(scan *sources.Scanner, g *gpu.Reader, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string), memAlert, tempAlert int, inspect bool) *App {
+func New(scan Scanner, g GPU, store *proxy.Store, listen, version string, idleAfter time.Duration, notify func(string), memAlert, tempAlert int, inspect bool) *App {
 	return &App{scan: scan, gpu: g, store: store, listen: listen, version: version,
-		idleAfter: idleAfter, notify: notify, memAlert: memAlert, tempAlert: tempAlert, inspect: inspect,
+		idleAfter: idleAfter, notify: notify, memAlert: memAlert, tempAlert: tempAlert, inspect: inspect, now: time.Now,
 		seen: map[string]time.Time{}, gpuHist: map[string]*trace{}, lastOverflowNotify: map[string]time.Time{}}
 }
 
@@ -284,13 +288,32 @@ func (a *App) View() tea.View {
 
 // how many request rows fit without pushing the status line off screen
 func (a *App) reqRows() int {
+	lineW := (a.w-6)/2 - 4
 	models := len(a.rows) + 2
-	if a.noteLine((a.w-6)/2-4) != "" {
+	if a.noteLine(lineW) != "" {
 		models++
 	}
-	topLines := max(models, len(a.gpus)*2+1) // header+rows vs name+stats per gpu
-	free := a.h - topLines - 13
+	if a.verdictLine(lineW) != "" {
+		models++
+	}
+	gpus := len(a.gpus)*2 + 1 + a.throttleLines() // header+rows vs name+stats per gpu
+	free := a.h - max(models, gpus) - 13
 	return min(max(free, 4), 30)
+}
+
+// SetTarget tells the app which upstream the proxy forwards to (a url or
+// host:port), so traffic can be matched to the rows of that server.
+func (a *App) SetTarget(u string) { a.target = sources.HostPort(u) }
+
+// SetDemo marks the app as running on simulated data.
+func (a *App) SetDemo() { a.demo = true }
+
+// clock is a.now, falling back to time.Now for an App built as a literal.
+func (a *App) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
 
 func (a *App) statusLine() string {

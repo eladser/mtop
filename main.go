@@ -118,6 +118,7 @@ func runTop() {
 	}
 	scan := sources.New(olls, *llamacpp, *lmstudio, *vllm, *llamaswap, *lemonade, *sglang)
 	app := ui.New(scan, gpu.New(), store, proxyAddr, version, *idle, notifier, *memAlert, *tempAlert, *inspect)
+	app.SetTarget(*target)
 	if _, err := tea.NewProgram(app).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
