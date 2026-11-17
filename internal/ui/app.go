@@ -78,6 +78,8 @@ type App struct {
 
 	lastOverflowCheck  time.Time            // requests older than this were already considered
 	lastOverflowNotify map[string]time.Time // per-model cooldown for ctx-overflow notifications
+
+	live map[uint64][]liveSample // recent chunk counts per in-flight request
 }
 
 type trace struct{ util, mem []float64 }
@@ -108,7 +110,7 @@ type unloaded struct {
 func (a *App) Init() tea.Cmd {
 	a.start = time.Now()
 	a.lastOverflowCheck = a.start
-	return a.poll
+	return tea.Batch(a.poll, liveTickCmd())
 }
 
 // addEnergy integrates whole-GPU watts over the poll interval into
@@ -253,6 +255,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, next
 	case tick:
 		return a, a.poll
+	case liveTick:
+		a.sampleLive()
+		return a, liveTickCmd()
 	case unloaded:
 		a.flashAt = time.Now()
 		a.flashOk = m.err == nil
@@ -656,12 +661,16 @@ func (a *App) requestsPane() string {
 		b.WriteString("\n" + warnSt.Render("proxy failed: "+err.Error()))
 		return b.String()
 	}
-	reqs := a.store.Recent(a.reqRows())
-	if len(reqs) == 0 {
+	live, nfin := a.liveRows(a.reqRows())
+	reqs := a.store.Recent(nfin)
+	if len(reqs) == 0 && len(live) == 0 {
 		b.WriteString("\n" + dimSt.Render("none yet. point your client at http://"+a.listen+" (e.g. OLLAMA_HOST="+a.listen+") to see live requests"))
 		return b.String()
 	}
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("%-9s %-26s %10s %6s %8s  %s", "TIME", "MODEL", "TOK/S", "OUT", "PROMPT", "TOTAL")))
+	for _, l := range live {
+		b.WriteString("\n" + l)
+	}
 	for _, r := range reqs {
 		b.WriteString(fmt.Sprintf("\n%-9s %-26s %10.1f %6d %8d  %s",
 			r.When.Format("15:04:05"), clean(r.Model), r.TokSec, r.OutTk, r.PromptTk, r.Total.Round(10*time.Millisecond)))
@@ -691,7 +700,11 @@ func (a *App) byModelPane() string {
 func (a *App) throughputPane() string {
 	rates := a.store.TokRates(60)
 	title := titleSt.Render("TOK/S")
+	lr, lok := a.liveTotal()
 	if len(rates) == 0 {
+		if lok {
+			return title + " " + selSt.Render(fmt.Sprintf("%.1f live", lr))
+		}
 		return title + " " + dimSt.Render("waiting for traffic")
 	}
 	peak := 0.0
@@ -713,7 +726,11 @@ func (a *App) throughputPane() string {
 	if w < 8 {
 		w = 8
 	}
-	return fmt.Sprintf("%s %s  %.1f %s", title, selSt.Render(sparkline(rates, w)), rates[len(rates)-1],
+	last, tag := rates[len(rates)-1], ""
+	if lok {
+		last, tag = lr, "live "
+	}
+	return fmt.Sprintf("%s %s  %.1f %s%s", title, selSt.Render(sparkline(rates, w)), last, tag,
 		dimSt.Render(suffix))
 }
 
@@ -733,6 +750,10 @@ func (a *App) inspectorPane() string {
 	b.WriteString(dimSt.Render("  " + r.When.Format("15:04:05") + " " + clean(r.Model)))
 	b.WriteString("\n" + dimSt.Render(fmt.Sprintf("load %s · prompt %s · %d→%d tok · %.1f tok/s",
 		r.Load.Round(time.Millisecond), r.PromptEval.Round(time.Millisecond), r.PromptTk, r.OutTk, r.TokSec)))
+	if r.TTFT > 0 {
+		b.WriteString(dimSt.Render(" · ttft " + r.TTFT.Round(time.Millisecond).String()))
+	}
+
 	switch {
 	case r.Ctx > 0 && ctxMarker(r) != "":
 		b.WriteString("\n" + warnSt.Render(fmt.Sprintf("context %d/%d (%d%%), older messages likely dropped",
