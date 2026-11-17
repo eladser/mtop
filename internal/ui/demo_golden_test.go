@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,8 +19,10 @@ var demoBase = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 // 1.5s and sampling live rows every 250ms like the real loop does.
 func demoAt(t *testing.T, d time.Duration, w, h, sel int) *App {
 	t.Helper()
+	// the sim goroutine reads the clock while this one advances it
+	var mu sync.Mutex
 	cur := demoBase
-	now := func() time.Time { return cur }
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return cur }
 	sim := demo.New()
 	store := proxy.NewStore(256)
 	store.SetNow(now)
@@ -35,9 +38,12 @@ func demoAt(t *testing.T, d time.Duration, w, h, sel int) *App {
 	t.Cleanup(func() { cancel(); <-done })
 
 	for ms := time.Duration(0); ms <= d; ms += 50 * time.Millisecond {
-		cur = demoBase.Add(ms)
-		step <- cur
-		step <- cur // returns once the first is handled
+		at := demoBase.Add(ms)
+		mu.Lock()
+		cur = at
+		mu.Unlock()
+		step <- at
+		step <- at // returns once the first is handled
 		if ms%(250*time.Millisecond) == 0 {
 			a.Update(liveTick{})
 		}
@@ -47,7 +53,7 @@ func demoAt(t *testing.T, d time.Duration, w, h, sel int) *App {
 	}
 	for i, r := range a.rows {
 		if !r.Expires.IsZero() {
-			a.rows[i].Expires = time.Now().Add(r.Expires.Sub(cur)) // ttl text counts from the wall clock
+			a.rows[i].Expires = time.Now().Add(r.Expires.Sub(now())) // ttl text counts from the wall clock
 		}
 	}
 	a.sel = sel
