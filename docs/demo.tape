@@ -1,24 +1,29 @@
 # vhs docs/demo.tape
 #
-# needs ollama with qwen3:0.6b loaded partly on cpu (num_gpu 4) and
-# smollm2:135m at num_ctx 512, plus some traffic through 127.0.0.1:4321
-# while it records. Run from the repo root with a built ./mtop.exe (./mtop elsewhere).
+# no ollama, gpu or traffic needed, mtop --demo fakes all of it. Run from
+# the repo root with a built ./mtop.exe (./mtop elsewhere). The scenario
+# loops every 40s and the cues below are tuned to it: live rows from the
+# start, the cpu verdict on qwen3:32b, the thermal throttle line from
+# ~20s, the queue verdict on the llama.cpp row from ~32s. The window has
+# to be at least 100x30; Height 720 is about 31 rows at FontSize 18.
 #
 # vhs 0.12 on windows records the frames but doesn't write the gif, so
 # the frames go to a folder too (on the same drive as %TEMP%, or they
 # silently go missing):
-#   ffmpeg -framerate 10 -i $TEMP/mtop-frames/frame-text-%05d.png -framerate 10 -i $TEMP/mtop-frames/frame-cursor-%05d.png \
-#     -filter_complex "[0][1]overlay,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" docs/img/demo.gif
+#   ffmpeg -y -framerate 10 -i $TEMP/mtop-frames-demo/frame-text-%05d.png -framerate 10 -i $TEMP/mtop-frames-demo/frame-cursor-%05d.png \
+#     -filter_complex "[0][1]overlay,crop=1111:612:0:0,fps=8,split[a][b];[a]palettegen=max_colors=40:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" docs/img/demo.gif
+#
+# the crop drops the empty bottom of the 31-row window (the footer ends at y=600).
 
 # machine-specific: edit to a folder on the same drive as %TEMP%
-Output "C:/Users/Elads/AppData/Local/Temp/mtop-frames/"
+Output "C:/Users/Elads/AppData/Local/Temp/mtop-frames-demo/"
 Output docs/img/demo.gif
 
 Set Shell "powershell"
 Set FontFamily "Cascadia Mono"
 Set FontSize 18
 Set Width 1165
-Set Height 470
+Set Height 720
 Set Padding 12
 Set Framerate 10
 Set TypingSpeed 0
@@ -27,21 +32,20 @@ Set Theme { "name": "Campbell", "black": "#0C0C0C", "red": "#C50F1F", "green": "
 
 # vhs sets NO_COLOR, which turns mtop monochrome
 Hide
-Type "Remove-Item env:NO_COLOR; cls; ./mtop.exe -inspect"
+Type "Remove-Item env:NO_COLOR; cls; ./mtop.exe --demo"
 Enter
 Sleep 1.5s
-Type "j"
-Sleep 300ms
 Show
 
-Sleep 9s
-Type "c"
+# live rows streaming, then the 32b offload verdict
 Sleep 3s
-Type "c"
-Sleep 1.5s
-Type "i"
-Sleep 3.5s
-Type "i"
-Sleep 1s
+Type "j"
+Type "j"
+Sleep 17s
+
+# thermal throttle line is up by now (3-poll debounce); the queue verdict
+# on the llama.cpp row needs ~32s into the loop
+Type "j"
+Sleep 14.5s
 Type "q"
 Sleep 500ms

@@ -5,6 +5,7 @@
 ### Added
 - Requests in flight show at the top of the requests pane with a `▶`: elapsed time, output chunks so far (`~42`), a live tok/s once a stream has 3 chunks, and at 100 columns the TTFT and decode time (`ttft 0.42s · dec 3.5s`). A request that is still waiting shows `prefill`, a non-streamed one `not streaming`. The TOK/S line shows the summed live rate. More live requests than fit collapse into a `+N more live` row.
 - The inspector shows the request's TTFT, and `-history` records it.
+- `mtop --demo` runs on simulated models, traffic and a GPU, so there is something to look at without a server. It opens no port, reads no config and writes no files. Titles and the status line are marked DEMO.
 - The Lemonade row shows running requests and tok/s from `/v1/stats` (v2026.43.3 and later). Lemonade reports them server-wide, so they only show with one model loaded.
 - The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
 - On a llama.cpp router each loaded model gets its own slots, context size and running/queued counts, so context-overflow warnings work there too.

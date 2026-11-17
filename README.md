@@ -30,6 +30,8 @@ Or grab a binary from [releases](https://github.com/eladser/mtop/releases), or b
 
 Run `mtop`. It looks for the usual servers on their usual ports, no config file to write.
 
+No model server running? `mtop --demo` plays a looping 40-second scenario on simulated models, traffic and a GPU, so you can see every pane. It opens no port and reads no config.
+
 ## Seeing requests
 
 Most local servers don't expose per-request numbers anywhere. The data only exists in the response stream as it streams. So mtop runs a little pass-through proxy on `127.0.0.1:4321` and reads the numbers off the wire. Point your client at it:
@@ -85,6 +87,7 @@ tok/s is decode speed; TOTAL is wall-clock and includes the model load on the fi
 -temp-alert   gpu temperature for the alert line (default 87)
 -inspect      capture prompt, thinking and completion text (kept in memory, never written to history)
 -no-proxy     don't run the proxy
+--demo        run on simulated models, traffic and a GPU (no server needed)
 ```
 
 The TOK/S line also tracks session energy: watt-hours used and tokens per watt-hour, from whole-GPU power. It's an estimate (the whole card, not just inference), so read it as a rough efficiency number, not a meter.

@@ -332,16 +332,23 @@ func (a *App) statusLine() string {
 	if alert := a.gpuAlert(); alert != "" {
 		return warnSt.Render("  " + alert)
 	}
+	flashing := a.flash != "" && time.Since(a.flashAt) < 12*time.Second
+	if a.demo && !flashing {
+		return demoSt.Render("  " + demoHelp)
+	}
 	proxy := "proxy off"
 	if a.listen != "" {
 		proxy = "proxy on " + a.listen
 	}
 	help := fmt.Sprintf("  ↑/↓ select · u unload · c %s · i inspect · q quit · %s · v%s",
 		map[bool]string{true: "requests", false: "by model"}[a.byModel], proxy, a.version)
-	if a.flash != "" && time.Since(a.flashAt) < 12*time.Second {
+	if flashing {
 		st := selSt
 		if !a.flashOk {
 			st = warnSt
+		}
+		if a.demo {
+			return st.Render("  "+clean(a.flash)) + demoSt.Render(" · "+demoHelp)
 		}
 		return st.Render("  "+clean(a.flash)) + dimSt.Render(" ·"+help[2:])
 	}
@@ -395,7 +402,11 @@ func (a *App) modelsPane(w int) string {
 		disk = fmt.Sprintf("  %d on disk", a.disk)
 	}
 	// reqRows counts the title as one line: drop the disk count, then cut the servers
-	if n := lineW - len("MODELS"); len([]rune(srv+disk)) > n {
+	n := lineW - len("MODELS")
+	if a.demo {
+		n -= len(demoTag)
+	}
+	if len([]rune(srv+disk)) > n {
 		disk = ""
 		if srv = trunc(srv, n); n < 2 {
 			srv = ""
@@ -408,6 +419,7 @@ func (a *App) modelsPane(w int) string {
 	if disk != "" {
 		b.WriteString(dimSt.Render(disk))
 	}
+	b.WriteString(a.demoTitle())
 	multi := len(a.alive) > 1
 	switch {
 	case a.ollErr != nil && len(a.rows) == 0:
@@ -578,7 +590,7 @@ func ctxMarker(r proxy.Request) string {
 
 func (a *App) gpuPane() string {
 	var b strings.Builder
-	b.WriteString(titleSt.Render("GPU"))
+	b.WriteString(titleSt.Render("GPU") + a.demoTitle())
 	switch {
 	case !a.gpu.Available():
 		b.WriteString("\n" + dimSt.Render("no gpu tool found (nvidia-smi / rocm-smi)"))
