@@ -232,6 +232,8 @@ func TestJudgeUsesRowCtxForAlias(t *testing.T) {
 	store := proxy.NewStore(10)
 	store.Add(proxy.Request{Model: "llama3.1", When: time.Now(), PromptTk: 4096, Overflow: true})
 	a := &App{store: store, rows: []sources.Row{{Name: "llama3.1:latest", From: "ollama", Base: "127.0.0.1:11434", Ctx: 4096}}}
+	// session started before the request, or the rules skip it as history
+	a.start = time.Now().Add(-time.Minute)
 	a.SetTarget("127.0.0.1:11434")
 	a.judge()
 	if _, ok := a.verdicts["ollama|llama3.1:latest"]; !ok {
