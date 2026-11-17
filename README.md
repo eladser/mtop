@@ -6,7 +6,7 @@
 
 ![demo](docs/img/demo.gif)
 
-One terminal window for whatever you're running locally (Ollama, llama.cpp, LM Studio, vLLM, llama-swap, Lemonade, SGLang). It shows the loaded models and how much VRAM they're sitting on, the GPU, and the requests going through with their tok/s. Hit `c` to flip the middle pane to per-model stats.
+One terminal window for whatever you're running locally (Ollama, llama.cpp, LM Studio, vLLM, llama-swap, Lemonade, SGLang). It shows the loaded models and how much VRAM they're sitting on, the GPU, and the requests going through with their tok/s, live while they stream. When a model is slow and mtop can tell why (spilled to CPU, context full, requests queueing), it says so under the models table. Hit `c` to flip the middle pane to per-model stats.
 
 It'll also kick out models that won't leave. Pick one, press `u`, gone. Ollama is supposed to unload idle models on its own and usually does, but every so often `ollama ps` shows something that expired ten minutes ago still parked on 8 gigs. mtop flags those as overdue. `-idle-unload 15m` clears them for you.
 
@@ -30,7 +30,7 @@ Or grab a binary from [releases](https://github.com/eladser/mtop/releases), or b
 
 Run `mtop`. It looks for the usual servers on their usual ports, no config file to write.
 
-No model server running? `mtop --demo` plays a looping 40-second scenario on simulated models, traffic and a GPU, so you can see every pane. It opens no port and reads no config.
+No model server running? `mtop --demo` plays a looping 40-second scenario on simulated models, traffic and a GPU, so you can see every pane. It opens no port and touches no server.
 
 ## Seeing requests
 
@@ -42,6 +42,8 @@ base_url = "http://127.0.0.1:4321/v1"   # openai-style clients
 ```
 
 Your client gets the exact same bytes back. By default the proxy forwards to ollama; `-target` aims it at llama.cpp or LM Studio instead. The models and GPU panes don't need any of this.
+
+A request still streaming sits at the top of the pane with a `▶`: how long it's been going, tokens so far and the live tok/s, plus time to first token and decode time if the terminal is wide enough. For streamed OpenAI-style requests the final tok/s is decode only, so a slow prompt or a cold model load doesn't drag it down.
 
 The same port answers `/metrics` in prometheus format if you'd rather watch it from grafana.
 
@@ -111,6 +113,9 @@ Ollama said it'd unload a model by a certain time and didn't. Press `u`, or set 
 
 **A model row says `cpu 38%`.**
 38% of that model didn't fit in VRAM and runs from system RAM, which is why it's slow. Free some VRAM, pick a smaller quant, or lower `num_ctx`. `cpu` in the VRAM column means it's all on CPU. Ollama and Lemonade report this; llama.cpp and LM Studio don't expose their offload split, so their rows never show it.
+
+**There's a `↳` line under the models table.**
+That's mtop's guess at why the selected model is slow: `38% of model on CPU`, `context 94% full`, `prompt cut to fit context`, `3 requests queued`. Other models with a reason get a `!`. Queueing only shows for llama.cpp, vLLM and SGLang, since ollama doesn't say how many requests it's holding. A `hw thermal slowdown` or `hw power brake` line in the GPU pane means the card is throttling itself (NVIDIA only).
 
 **A request says `ctx 97%`.**
 The prompt filled 97% of the model's context window. Ollama quietly drops the oldest part of a prompt that doesn't fit, so from 90% up the model has probably lost the start of the conversation. `ctx over, rejected` means the server refused it outright. Raise the context size or send less.
