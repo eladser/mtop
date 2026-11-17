@@ -11,6 +11,7 @@ import (
 	"github.com/eladser/mtop/internal/gpu"
 	"github.com/eladser/mtop/internal/proxy"
 	"github.com/eladser/mtop/internal/sources"
+	"github.com/eladser/mtop/internal/verdict"
 )
 
 const pollEvery = 1500 * time.Millisecond
@@ -47,6 +48,11 @@ type App struct {
 	now    func() time.Time // nil means time.Now, use clock()
 	target string           // host:port the proxy forwards to, for matching traffic to rows
 	demo   bool
+
+	vtrack    *verdict.Tracker
+	verdicts  map[string]verdict.Verdict // by rowKey, from the last poll
+	gdeb      gpu.Debounce
+	throttled []uint8 // debounced gpu.Throttle bits per gpu
 
 	w, h    int
 	sel     int
@@ -209,6 +215,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.store.SetGPU(samples(a.gpus))
 		a.store.SetModels(modelInfos(a.rows))
 		a.recordGPU()
+		a.judge()
 		a.addEnergy()
 		a.notifyOverflow()
 		// fire a desktop notification when an alert first shows up, and
@@ -415,6 +422,8 @@ func (a *App) modelsPane(w int) string {
 			switch {
 			case i == a.sel:
 				b.WriteString("\n" + selSt.Render("▸ "+line))
+			case a.hasVerdict(i):
+				b.WriteString("\n" + warnSt.Render("! "+line))
 			case overdue(r), partialCPU(r):
 				b.WriteString("\n" + warnSt.Render("  "+line))
 			default:
@@ -423,6 +432,10 @@ func (a *App) modelsPane(w int) string {
 		}
 		if n := a.noteLine(lineW); n != "" {
 			b.WriteString("\n" + dimSt.Render("  "+trunc(n, lineW)))
+		}
+		if l := a.verdictLine(lineW); l != "" {
+			v, _ := a.verdictFor(a.sel)
+			b.WriteString("\n" + verdictStyle(v.Level).Render(l))
 		}
 	}
 	return b.String()
@@ -568,7 +581,7 @@ func (a *App) gpuPane() string {
 		b.WriteString("\n" + dimSt.Render("gpu read failed: "+a.gpuErr.Error()))
 	default:
 		var totMiB int
-		for _, g := range a.gpus {
+		for i, g := range a.gpus {
 			totMiB += g.MemTotal
 			pct := 0
 			if g.MemTotal > 0 {
@@ -581,6 +594,9 @@ func (a *App) gpuPane() string {
 			b.WriteString("\n" + g.Name + "\n" + st.Render(fmt.Sprintf(
 				"util %3s  mem %d/%d MiB (%d%%)  %s  %s",
 				naPct(g.Util), g.MemUsed, g.MemTotal, pct, naTemp(g.Temp), naWatt(g.Power))))
+			if t := a.throttleText(i); t != "" {
+				b.WriteString("\n" + warnSt.Render(t))
+			}
 			if t := a.gpuHist[g.Name]; t != nil && len(t.util) > 1 {
 				b.WriteString("\n" + dimSt.Render("util ") + selSt.Render(sparkPct(t.util)) +
 					dimSt.Render("  mem ") + selSt.Render(sparkPct(t.mem)))

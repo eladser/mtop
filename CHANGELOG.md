@@ -6,6 +6,8 @@
 - The Lemonade row shows running requests and tok/s from `/v1/stats` (v2026.43.3 and later). Lemonade reports them server-wide, so they only show with one model loaded.
 - The llama.cpp row shows queued requests (`3 queued`) and, with a draft model, the share of draft tokens accepted since the server started (`draft 71%`).
 - On a llama.cpp router each loaded model gets its own slots, context size and running/queued counts, so context-overflow warnings work there too.
+- A why-slow line under the models table for the selected model: `rejected: context full`, `prompt cut to fit context`, `38% of model on CPU`, `3 requests queued` / `6 requests, 4 slots`, `context 94% full`. Other models with a verdict get a `!` and a warn color. Queue detection needs llama.cpp, vLLM or SGLang; Ollama doesn't report slots or a queue.
+- A `hw thermal slowdown`, `hw power brake` or `hw slowdown` line in the GPU pane when nvidia-smi reports a hardware throttle flag for 3 polls in a row with the card at 30% util or more. NVIDIA only.
 
 ### Fixed
 - A llama.cpp router showed a phantom `none` row instead of its loaded models.

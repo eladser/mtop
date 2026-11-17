@@ -11,6 +11,7 @@ import (
 	"github.com/eladser/mtop/internal/gpu"
 	"github.com/eladser/mtop/internal/proxy"
 	"github.com/eladser/mtop/internal/sources"
+	"github.com/eladser/mtop/internal/verdict"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -86,6 +87,16 @@ func TestGoldenView(t *testing.T) {
 	}{
 		{name: "requests", golden: "testdata/view.golden"},
 		{name: "by model", golden: "testdata/view_bymodel.golden", tweak: func(a *App) { a.byModel = true }},
+		{name: "verdicts", golden: "testdata/view_verdicts.golden", tweak: func(a *App) {
+			a.verdicts = map[string]verdict.Verdict{
+				"ollama|qwen3:32b":               {Kind: verdict.CPU, Level: verdict.Red, Text: "38% of model on CPU"},
+				"llama.cpp|Qwen3-8B-Q4_K_M.gguf": {Kind: verdict.Queue, Level: verdict.Amber, Text: "3 requests queued"},
+			}
+		}},
+		{name: "throttle", golden: "testdata/view_throttle.golden", tweak: func(a *App) {
+			a.gpus[0].Throttle = gpu.ThrottleThermal
+			a.throttled = []uint8{gpu.ThrottleThermal}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
