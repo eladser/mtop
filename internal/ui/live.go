@@ -172,7 +172,7 @@ func (a *App) liveRow(f proxy.Flight, now time.Time, avail int) string {
 	}
 	var b strings.Builder
 	b.WriteString(selSt.Render("▶"))
-	fmt.Fprintf(&b, "%8s %-26s %10s %6s %8s  %s", liveClock(now.Sub(f.Started)), model, tok, out, "-", "-")
+	fmt.Fprintf(&b, "%8s %-26s %10s %6s %8s  %-5s", liveClock(now.Sub(f.Started)), model, tok, out, "-", "-")
 
 	if t := liveTail(f, now, avail); t != "" {
 		b.WriteString("  " + dimSt.Render(t))

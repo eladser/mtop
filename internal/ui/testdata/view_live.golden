@@ -10,9 +10,9 @@
 ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ REQUESTS                                                                                       │
 │ TIME      MODEL                           TOK/S    OUT   PROMPT  TOTAL                         │
-│ ▶    2.3s llama3.1:8b                         -      -        -  -  prefill                    │
-│ ▶    3.9s qwen3:32b                        20.0    ~40        -  -  ttft 0.42s · dec 3.5s      │
-│ ▶   1m05s gpt-oss-20b                         -      -        -  -  not streaming              │
+│ ▶    2.3s llama3.1:8b                         -      -        -  -      prefill                │
+│ ▶    3.9s qwen3:32b                        20.0    ~40        -  -      ttft 0.42s · dec 3.5s  │
+│ ▶   1m05s gpt-oss-20b                         -      -        -  -      not streaming          │
 │ 12:00:05  qwen3:32b                        42.3    128     3980  910ms  ctx 97%                │
 │ 12:00:04  phi-4                            12.1      8     5000  300ms  ctx over, rejected     │
 │ 12:00:03  qwen3:0.6b                       88.0     40       50  120ms                         │
