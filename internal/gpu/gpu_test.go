@@ -1,6 +1,10 @@
 package gpu
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestParse(t *testing.T) {
 	out := "NVIDIA GeForce RTX 4080, 35, 8123, 16376, 62, 180.25\n"
@@ -60,5 +64,170 @@ func TestUsedFromVMStat(t *testing.T) {
 	// (1000+500+250) * 16384 / 1MiB = 27
 	if got := usedFromVMStat(out); got != 27 {
 		t.Fatalf("got %d MiB", got)
+	}
+}
+
+func TestParseThrottle(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want uint8
+	}{
+		{"none", "RTX 4090, 35, 100, 200, 60, 90.0, Not Active, Not Active, Not Active", 0},
+		{"thermal", "RTX 4090, 35, 100, 200, 60, 90.0, Active, Not Active, Not Active", ThrottleThermal},
+		{"power brake", "RTX 4090, 35, 100, 200, 60, 90.0, Not Active, Active, Not Active", ThrottlePower},
+		{"hw", "RTX 4090, 35, 100, 200, 60, 90.0, Not Active, Not Active, Active", ThrottleHW},
+		{"all", "RTX 4090, 35, 100, 200, 60, 90.0, Active, Active, Active", ThrottleThermal | ThrottlePower | ThrottleHW},
+		{"n/a", "RTX 4090, 35, 100, 200, 60, 90.0, [N/A], [N/A], [N/A]", 0},
+		{"not supported", "RTX 4090, 35, 100, 200, 60, 90.0, [Not Supported], [Not Supported], [Not Supported]", 0},
+		{"legacy 6 fields", "RTX 4090, 35, 100, 200, 60, 90.0", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			all := parse(tt.line + "\n")
+			if len(all) != 1 || all[0].Throttle != tt.want {
+				t.Fatalf("got %+v, want throttle %d", all, tt.want)
+			}
+			if all[0].Util != 35 || all[0].Power != 90 {
+				t.Fatalf("base fields off: %+v", all[0])
+			}
+		})
+	}
+}
+
+func TestNvidiaLadder(t *testing.T) {
+	old := runSMI
+	defer func() { runSMI = old }()
+	const base = "RTX 4090, 35, 100, 200, 60, 90.0"
+	run := func(accept string) (calls *[]string) {
+		calls = new([]string)
+		runSMI = func(path string, args ...string) ([]byte, error) {
+			q := args[0]
+			*calls = append(*calls, q)
+			switch {
+			case strings.Contains(q, "clocks_event_reasons") && accept == "event":
+				return []byte(base + ", Active, Not Active, Not Active\n"), nil
+			case strings.Contains(q, "clocks_throttle_reasons") && accept == "throttle":
+				return []byte(base + ", Not Active, Active, Not Active\n"), nil
+			case !strings.Contains(q, "clocks_") && accept == "base":
+				return []byte(base + "\n"), nil
+			}
+			return nil, errors.New("exit status 2")
+		}
+		return
+	}
+
+	t.Run("event reasons", func(t *testing.T) {
+		calls := run("event")
+		var l smiLadder
+		g, err := readNvidia(&l, "smi")
+		if err != nil || len(g) != 1 || g[0].Throttle != ThrottleThermal {
+			t.Fatalf("got %+v, %v", g, err)
+		}
+		readNvidia(&l, "smi")
+		if len(*calls) != 2 {
+			t.Fatalf("one call per read once decided, got %v", *calls)
+		}
+	})
+	t.Run("old alias", func(t *testing.T) {
+		calls := run("throttle")
+		var l smiLadder
+		g, err := readNvidia(&l, "smi")
+		if err != nil || len(g) != 1 || g[0].Throttle != ThrottlePower {
+			t.Fatalf("got %+v, %v", g, err)
+		}
+		n := len(*calls)
+		readNvidia(&l, "smi")
+		if len(*calls) != n+1 {
+			t.Fatalf("should skip the failed rung next time: %v", *calls)
+		}
+	})
+	t.Run("no throttle fields", func(t *testing.T) {
+		calls := run("base")
+		var l smiLadder
+		g, err := readNvidia(&l, "smi")
+		if err != nil || len(g) != 1 || g[0].Util != 35 || g[0].Throttle != 0 {
+			t.Fatalf("pane must not blank: %+v, %v", g, err)
+		}
+		n := len(*calls)
+		readNvidia(&l, "smi")
+		if len(*calls) != n+1 {
+			t.Fatalf("got %v", *calls)
+		}
+	})
+	t.Run("everything fails", func(t *testing.T) {
+		run("none")
+		var l smiLadder
+		if _, err := readNvidia(&l, "smi"); err == nil {
+			t.Fatal("want the error")
+		}
+		if l.decided {
+			t.Fatal("decided on a total failure")
+		}
+	})
+}
+
+func TestDebounce(t *testing.T) {
+	var d Debounce
+	hot := []Stats{{Util: 80, Throttle: ThrottleThermal}}
+	for i := 1; i <= 2; i++ {
+		if got := d.Update(hot); got[0] != 0 {
+			t.Fatalf("poll %d showed early: %d", i, got[0])
+		}
+	}
+	if got := d.Update(hot); got[0] != ThrottleThermal {
+		t.Fatalf("poll 3 should show: %d", got[0])
+	}
+	cool := []Stats{{Util: 80}}
+	for i := 1; i <= 2; i++ {
+		if got := d.Update(cool); got[0] != ThrottleThermal {
+			t.Fatalf("clean poll %d cleared early", i)
+		}
+	}
+	if got := d.Update(cool); got[0] != 0 {
+		t.Fatalf("3 clean polls should clear: %d", got[0])
+	}
+}
+
+func TestDebounceGateAndFlicker(t *testing.T) {
+	var d Debounce
+	idle := []Stats{{Util: 29, Throttle: ThrottleHW}}
+	for i := 0; i < 5; i++ {
+		if got := d.Update(idle); got[0] != 0 {
+			t.Fatal("showed under the util gate")
+		}
+	}
+	on, off := []Stats{{Util: 90, Throttle: ThrottleHW}}, []Stats{{Util: 90}}
+	d = Debounce{}
+	d.Update(on)
+	d.Update(on)
+	d.Update(off) // flicker resets the count
+	if got := d.Update(on); got[0] != 0 {
+		t.Fatal("flicker counted")
+	}
+	// util dropping below the gate while shown counts as clean
+	d = Debounce{}
+	for i := 0; i < 3; i++ {
+		d.Update(on)
+	}
+	for i := 0; i < 2; i++ {
+		d.Update(idle)
+	}
+	if got := d.Update(idle); got[0] != 0 {
+		t.Fatal("gate drop didn't clear")
+	}
+}
+
+func TestDebounceBitsAndCount(t *testing.T) {
+	var d Debounce
+	both := []Stats{{Util: 90, Throttle: ThrottleThermal | ThrottleHW}, {Util: 90}}
+	d.Update(both)
+	d.Update(both)
+	got := d.Update(both)
+	if got[0] != ThrottleThermal|ThrottleHW || got[1] != 0 {
+		t.Fatalf("got %v", got)
+	}
+	if got := d.Update(both[:1]); len(got) != 1 {
+		t.Fatalf("gpu count change: %v", got)
 	}
 }

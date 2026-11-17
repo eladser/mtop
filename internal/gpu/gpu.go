@@ -29,7 +29,8 @@ const (
 
 type Reader struct {
 	nvidia string
-	amd    string
+	smi    smiLadder
+	amd   string
 	amdSMI *amdSMI
 	pdh    *pdhReader
 	mac    bool
@@ -72,7 +73,7 @@ func (r *Reader) Read() ([]Stats, error) {
 	var all []Stats
 	var lastErr error
 	if r.nvidia != "" {
-		s, err := readNvidia(r.nvidia)
+		s, err := readNvidia(&r.smi, r.nvidia)
 		all, lastErr = append(all, s...), err
 	}
 	if r.amdSMI != nil {
@@ -96,16 +97,6 @@ func (r *Reader) Read() ([]Stats, error) {
 	return nil, lastErr
 }
 
-func readNvidia(path string) ([]Stats, error) {
-	out, err := exec.Command(path,
-		"--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
-		"--format=csv,noheader,nounits").Output()
-	if err != nil {
-		return nil, err
-	}
-	return parse(string(out)), nil
-}
-
 func parse(out string) []Stats {
 	var all []Stats
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -113,14 +104,21 @@ func parse(out string) []Stats {
 		if len(f) < 6 {
 			continue
 		}
-		all = append(all, Stats{
+		g := Stats{
 			Name:     strings.TrimSpace(f[0]),
 			Util:     atoi(f[1]),
 			MemUsed:  atoi(f[2]),
 			MemTotal: atoi(f[3]),
 			Temp:     atoi(f[4]),
 			Power:    atof(f[5]),
-		})
+		}
+		// the three hw flags come after power.draw; legacy output has none
+		for i, bit := range [...]uint8{ThrottleThermal, ThrottlePower, ThrottleHW} {
+			if len(f) > 6+i && parseReason(f[6+i]) {
+				g.Throttle |= bit
+			}
+		}
+		all = append(all, g)
 	}
 	return all
 }
